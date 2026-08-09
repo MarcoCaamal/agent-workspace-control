@@ -81,10 +81,18 @@ pub struct InitStatus {
     pub schema_ok: bool,
 }
 
+/// Quick doctor report: the reported root plus one check per diagnostic, in
+/// the fixed order path, config, database, schema (design: doctor --quick).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickDoctor {
+    pub root: PathBuf,
+    pub checks: Vec<CheckResult>,
+}
+
 /// Typed outcome of a core command, rendered by `awctl` (Phase 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
     Init(InitStatus),
     Status(Status),
-    // Doctor(QuickDoctor) lands with the doctor use case (Phase 4).
+    Doctor(QuickDoctor),
 }

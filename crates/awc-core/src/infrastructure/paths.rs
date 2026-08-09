@@ -18,6 +18,12 @@ pub const WORKSPACE_DIR_NAME: &str = ".awc";
 /// target file contents are read or modified; escaping targets are rejected
 /// before any use.
 pub fn discover(start: &Path) -> Result<PathBuf, AwcError> {
+    Ok(discover_with_root(start)?.1)
+}
+
+/// Like [`discover`], also returning the canonical workspace root directory
+/// (the canonical ancestor containing `.awc`) next to the canonical state dir.
+pub fn discover_with_root(start: &Path) -> Result<(PathBuf, PathBuf), AwcError> {
     let mut dir = fs::canonicalize(start).map_err(AwcError::Io)?;
     loop {
         let entry = dir.join(WORKSPACE_DIR_NAME);
@@ -28,7 +34,7 @@ pub fn discover(start: &Path) -> Result<PathBuf, AwcError> {
                 if !state.starts_with(&root) || !state.is_dir() {
                     return Err(AwcError::UnsafeStatePath);
                 }
-                return Ok(state);
+                return Ok((root, state));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(AwcError::Io(err)),

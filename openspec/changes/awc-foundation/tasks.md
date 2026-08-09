@@ -53,9 +53,9 @@ Chain strategy: pending
 
 ## Phase 4: Application Use Cases
 
-- [ ] 4.1 Implement `application.rs` `init`: create dir, atomic config, open+migrate; remove only empty dir on config failure
-- [ ] 4.2 Implement read-only `status` and `doctor_quick` (config/database/schema/path checks)
-- [ ] 4.3 RED: integration — nested discovery, no-workspace without creating `.awc`, unchanged file metadata
+- [x] 4.1 Implement `application.rs` `init`: create dir, atomic config, open+migrate; remove only empty dir on config failure
+- [x] 4.2 Implement read-only `status` and `doctor_quick` (config/database/schema/path checks)
+- [x] 4.3 RED: integration — nested discovery, no-workspace without creating `.awc`, unchanged file metadata
 
 ## Phase 5: CLI Contracts
 

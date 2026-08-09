@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 
 use crate::error::AwcError;
 
@@ -31,6 +31,15 @@ const MIGRATIONS: &[&str] = &[
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );",
 ];
+
+/// Opens an existing database strictly read-only; never creates the file.
+/// Status/doctor use this so checking can never repair or recreate state.
+pub fn open_readonly(path: &Path) -> Result<Connection, AwcError> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?)
+}
 
 /// Opens (creating when absent) the database at `path` with foreign keys
 /// enabled. Callers then run [`migrate`].

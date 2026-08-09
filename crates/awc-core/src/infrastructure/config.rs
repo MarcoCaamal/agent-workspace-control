@@ -52,6 +52,19 @@ pub fn write_config_atomic(dir: &Path, bytes: &[u8]) -> Result<(), AwcError> {
     result.map_err(AwcError::Io)
 }
 
+/// Reads and parses an existing config without creating anything. Read-only
+/// status/doctor use this so checking a workspace can never write a config.
+pub fn load_readonly(dir: &Path) -> Result<Config, AwcError> {
+    let path = dir.join(CONFIG_FILE_NAME);
+    match fs::read(&path) {
+        Ok(bytes) => parse_config(&bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(AwcError::InvalidConfig(
+            "config.toml is missing".to_string(),
+        )),
+        Err(err) => Err(AwcError::Io(err)),
+    }
+}
+
 /// Loads the workspace config, atomically creating the default when absent.
 ///
 /// Existing valid config bytes are preserved untouched; invalid TOML and

@@ -280,3 +280,48 @@ Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
 - Repair scope is module-level (open+migrate); full init composition (dir/config/db ordering, empty-dir removal) is Phase 4 task 4.1.
 - `schema_health` treats a missing ledger row as unhealthy (ledger authoritative) — documented, tested.
 - None blocking this slice.
+# Apply Progress: AWC Foundation — Slice 5 (PR 5)
+
+- **Work unit**: `slice-5-application-use-cases` (attempt ordinal 5); date 2026-08-09
+- **Mode**: Standard (strict_tdd: false); behavior-first RED → GREEN
+- **Delivery**: feature-branch-chain; child branch `feature/awc-foundation-05-application`
+
+## Tasks Completed (4.1–4.3)
+
+| Task | Status |
+|------|--------|
+| 4.1 `init`: canonical root/state safety, create `.awc`, atomic default config only when absent, open+migrate DB, remove only empty state dir created in this invocation on pre-config failure | [x] |
+| 4.2 Read-only `status` + `doctor_quick` composing discovery/config/sqlite; checks path/config/database/schema; no repair | [x] |
+| 4.3 RED integration: nested discovery, no-workspace without `.awc` creation, partial repair, unchanged config bytes/metadata, unhealthy missing-DB/unsafe-path | [x] |
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `application.rs` | Created | `init` (containment, `created_state_dir` guard + `remove_dir`, open+migrate), `status` (read-only open, unhealthy booleans), `doctor_quick` (unsafe path → failed path check only; check chain) + 7 RED-first tests |
+| `domain.rs` | Modified | `QuickDoctor { root, checks }`; `CommandResult::Doctor(QuickDoctor)` |
+| `config.rs`, `paths.rs`, `sqlite.rs`, `lib.rs` | Modified | `load_readonly` (parse, never create); `discover_with_root` (root+state); `open_readonly` (read-only open); module wiring + re-export |
+| `tasks.md`, `apply-progress.md` | Modified | Checkboxes 4.1–4.3 `[x]`; Slice 5 section appended (slices 1–5) |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awc-core` → `FAILED. 22 passed; 8 failed` (todo!() stubs). GREEN: `cargo test -p awc-core application` → `ok. 7 passed; 0 failed`; full `cargo test -p awc-core` → `ok. 29 passed; 0 failed` |
+| Runtime harness command/scenario and exact result | Temp-dir E2E: init → config.toml + state.sqlite3 migrated; status/doctor from nested dir report same canonical root; DB deleted → doctor reports database/schema failed AND file stays absent (read-only open cannot recreate); status `database_ok=false`; config bytes + mtime byte-identical after status/doctor; re-init repairs DB, config bytes unchanged; escaping symlink → doctor path check failed, init `UnsafeStatePath`, target untouched |
+| Rollback boundary | Delete `application.rs`; revert domain/config/paths/sqlite/lib.rs + tasks.md checkboxes + Slice 5 section. Cargo.lock untouched. Threat matrix: all rows N/A (design) — no RED tests |
+
+## Changed-Line Estimate
+
+- Authored: **~398** (application.rs 299, domain 10, config 13, paths 8, sqlite 11, lib 6, tasks.md 6, apply-progress ≈45)
+- Budget: 400 hard → **OK** (398); target ≤330 not met (~68 over) — all seven 4.3 evidence scenarios kept, none dropped; precedent slice 2 (~390) landed between target and hard budget
+
+## Remaining Work
+
+- Tasks 5.1–6.2 pending (5). Next: Unit 6 — awctl CLI (PR 6; `cargo test -p awctl`). No commit/push/PR performed (lifecycle actions require parent receipt validation).
+
+## Risks
+
+- `status` maps DB errors to `database_ok`/`schema_ok` booleans (design); `doctor_quick` carries detail strings. Missing/invalid config: hard `status` error, failed `doctor` check.
+- Empty-dir cleanup branch (pre-config failure) verified by inspection — deterministic trigger needs privilege games; "never remove pre-existing state" IS behavior-tested (`init_rejects_invalid_config_and_keeps_existing_state`).
+- Escaping-symlink tests `#[cfg(all(test, unix))]` (Linux Tier 1). None blocking.

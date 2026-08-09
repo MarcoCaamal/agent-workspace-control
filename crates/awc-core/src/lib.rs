@@ -5,14 +5,14 @@
 //! - [`infrastructure::config`] — versioned TOML config parsing and writing
 //! - [`infrastructure::paths`] — upward discovery with symlink containment
 //! - [`infrastructure::sqlite`] — transactional migrations with a version ledger
-//!
-//! Application use cases land in later work units.
+//! - [`application`] — `init`, `status`, and `doctor_quick` use cases
 
+pub mod application;
 pub mod domain;
 pub mod error;
 pub mod infrastructure;
 
-pub use domain::{CheckResult, CommandResult, Config, InitStatus, Status, Workspace};
+pub use domain::{CheckResult, CommandResult, Config, InitStatus, QuickDoctor, Status, Workspace};
 pub use error::AwcError;
 
 /// Returns the crate name; lets the `awctl` stub prove the path dependency.

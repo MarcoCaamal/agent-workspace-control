@@ -58,6 +58,35 @@ pub(crate) fn canonicalize_state_within(root: &Path, state: &Path) -> Result<Pat
     Ok(canonical_state)
 }
 
+/// Creates or repairs one governed directory (`artifacts/`, `inbox/`, `tmp/`,
+/// `trash/`) inside the workspace root (design: Config and paths).
+///
+/// An existing entry is validated through the same canonical containment
+/// check as `.awc`: a real directory or a contained symlink is accepted and
+/// its canonical path returned; an escaping, broken, or non-directory entry
+/// fails with [`AwcError::UnsafeStatePath`] and is never used, replaced, or
+/// deleted. A missing entry is created through its canonical parent, so a
+/// configured name with parent components can never write outside the root.
+pub fn ensure_governed_dir(root: &Path, name: &str) -> Result<PathBuf, AwcError> {
+    let root = fs::canonicalize(root).map_err(AwcError::Io)?;
+    let entry = root.join(name);
+    match fs::symlink_metadata(&entry) {
+        Ok(_) => canonicalize_state_within(&root, &entry),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            let parent = entry.parent().ok_or(AwcError::UnsafeStatePath)?;
+            let leaf = entry.file_name().ok_or(AwcError::UnsafeStatePath)?;
+            let parent = fs::canonicalize(parent).map_err(AwcError::Io)?;
+            if !parent.starts_with(&root) {
+                return Err(AwcError::UnsafeStatePath);
+            }
+            let target = parent.join(leaf);
+            fs::create_dir_all(&target).map_err(AwcError::Io)?;
+            Ok(target)
+        }
+        Err(err) => Err(AwcError::Io(err)),
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -189,5 +218,73 @@ mod tests {
             AwcError::UnsafeStatePath
         ));
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn governed_dirs_are_created_when_missing() {
+        let root = temp_dir("gov-create");
+        for name in ["artifacts", "inbox", "tmp", "trash"] {
+            ensure_governed_dir(&root, name).expect("create governed dir");
+            assert!(root.join(name).is_dir(), "missing {name}");
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn governed_dir_existing_is_kept_untouched() {
+        let root = temp_dir("gov-existing");
+        fs::create_dir_all(root.join("artifacts")).unwrap();
+        fs::write(root.join("artifacts").join("marker.txt"), b"keep").unwrap();
+        ensure_governed_dir(&root, "artifacts").expect("existing dir accepted");
+        assert_eq!(
+            fs::read(root.join("artifacts").join("marker.txt")).unwrap(),
+            b"keep"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn governed_dir_name_cannot_escape_via_parent_components() {
+        let root = temp_dir("gov-dotdot");
+        let pid = std::process::id();
+        let outside = std::env::temp_dir().join(format!("awc-core-paths-{pid}-gov-dotdot-target"));
+        let _ = fs::remove_dir_all(&outside);
+        fs::create_dir_all(&outside).unwrap();
+        let rel = format!("../awc-core-paths-{pid}-gov-dotdot-target/escape");
+
+        let err = ensure_governed_dir(&root, &rel).unwrap_err();
+        assert!(matches!(err, AwcError::UnsafeStatePath));
+        assert!(
+            !outside.join("escape").exists(),
+            "no write outside the root"
+        );
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn governed_dir_nested_name_creates_inside_existing_parent() {
+        let root = temp_dir("gov-nested");
+        fs::create_dir_all(root.join("data")).unwrap();
+        let created = ensure_governed_dir(&root, "data/artifacts").expect("nested create");
+        assert_eq!(created, canonical(&root.join("data").join("artifacts")));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn governed_dir_escaping_symlink_rejected_without_target_use() {
+        let root = temp_dir("gov-escape");
+        let outside = temp_dir("gov-escape-target");
+        let marker = outside.join("marker.txt");
+        fs::write(&marker, b"untouched").unwrap();
+        symlink(&outside, &root.join("artifacts")).unwrap();
+
+        assert!(matches!(
+            ensure_governed_dir(&root, "artifacts").unwrap_err(),
+            AwcError::UnsafeStatePath
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"untouched");
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 }

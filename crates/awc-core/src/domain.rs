@@ -14,6 +14,13 @@ pub const CONFIG_SCHEMA_VERSION: u32 = 1;
 /// Default SQLite state file name, relative to the `.awc` directory.
 pub const DEFAULT_DATABASE_FILE: &str = "state.sqlite3";
 
+/// Default governed directory names, relative to the workspace root
+/// (design: Config and paths).
+pub const DEFAULT_ARTIFACTS_DIR: &str = "artifacts";
+pub const DEFAULT_INBOX_DIR: &str = "inbox";
+pub const DEFAULT_TMP_DIR: &str = "tmp";
+pub const DEFAULT_TRASH_DIR: &str = "trash";
+
 /// Typed UUIDv7 identity of a project. SQLite stores the canonical
 /// hyphenated text form (design: Identity and lookup).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,11 +83,37 @@ pub struct ContentFingerprint {
     pub size: u64,
 }
 
-/// Versioned workspace configuration (`schema_version = 1`).
+/// Versioned workspace configuration (`schema_version = 1`). The governed
+/// directory fields are serde-defaulted: a valid v1 config that omits them
+/// loads with the defaults, and its bytes are never rewritten.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub schema_version: u32,
     pub database_file: String,
+    #[serde(default = "default_artifacts_dir")]
+    pub artifacts_dir: String,
+    #[serde(default = "default_inbox_dir")]
+    pub inbox_dir: String,
+    #[serde(default = "default_tmp_dir")]
+    pub tmp_dir: String,
+    #[serde(default = "default_trash_dir")]
+    pub trash_dir: String,
+}
+
+fn default_artifacts_dir() -> String {
+    DEFAULT_ARTIFACTS_DIR.to_string()
+}
+
+fn default_inbox_dir() -> String {
+    DEFAULT_INBOX_DIR.to_string()
+}
+
+fn default_tmp_dir() -> String {
+    DEFAULT_TMP_DIR.to_string()
+}
+
+fn default_trash_dir() -> String {
+    DEFAULT_TRASH_DIR.to_string()
 }
 
 impl Config {
@@ -89,6 +122,10 @@ impl Config {
         Config {
             schema_version: CONFIG_SCHEMA_VERSION,
             database_file: DEFAULT_DATABASE_FILE.to_string(),
+            artifacts_dir: DEFAULT_ARTIFACTS_DIR.to_string(),
+            inbox_dir: DEFAULT_INBOX_DIR.to_string(),
+            tmp_dir: DEFAULT_TMP_DIR.to_string(),
+            trash_dir: DEFAULT_TRASH_DIR.to_string(),
         }
     }
 }
@@ -208,12 +245,37 @@ pub struct QuickDoctor {
     pub checks: Vec<CheckResult>,
 }
 
+/// A persisted project (design: Metadata before lifecycle). `root_path` is
+/// optional external context metadata only — it never authorizes managed
+/// writes outside the AWC workspace root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    pub id: ProjectId,
+    pub slug: String,
+    pub name: String,
+    pub root_path: Option<PathBuf>,
+    pub status: String,
+}
+
+/// Input to `add_project`: a name plus an optional explicit slug (which
+/// bypasses derivation but follows the same slug rules) and an optional
+/// external `root_path` stored as metadata only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddProject {
+    pub name: String,
+    pub slug: Option<String>,
+    pub root_path: Option<PathBuf>,
+}
+
 /// Typed outcome of a core command, rendered by `awctl` (Phase 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
     Init(InitStatus),
     Status(Status),
     Doctor(QuickDoctor),
+    ProjectAdded(Project),
+    ProjectList(Vec<Project>),
+    ProjectShown(Project),
 }
 
 #[cfg(test)]

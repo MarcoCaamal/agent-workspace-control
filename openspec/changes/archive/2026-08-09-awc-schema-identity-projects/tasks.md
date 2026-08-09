@@ -37,26 +37,26 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Foundation — Migration, Config, Paths (PR 2)
 
-- [ ] 2.1 RED: `sqlite.rs` — empty v0.1 migrates to v2 (Project/Artifact/AuditEvent tables, ledger 2, `state.sqlite3` kept)
-- [ ] 2.2 RED: populated v0.1 table → `LegacySchemaData`, no DDL, rows/ledger unchanged
-- [ ] 2.3 RED: `config.rs` — v1 config without dir fields loads defaults, bytes unchanged
-- [ ] 2.4 RED: `paths.rs` — create/repair 4 governed dirs; reject escaping target/symlink
-- [ ] 2.5 GREEN: `sqlite.rs` — v2 migration transaction: row-count guard → FK-safe drop → create v2 → ledger 2
-- [ ] 2.6 GREEN: `config.rs` — serde defaults `artifacts_dir`/`inbox_dir`/`tmp_dir`/`trash_dir`
-- [ ] 2.7 GREEN: `paths.rs` — governed-dir repair with containment validation
-- [ ] 2.8 GREEN: `infrastructure/mod.rs` — export `hash`; gate clippy/fmt
+- [x] 2.1 RED: `sqlite.rs` — empty v0.1 migrates to v2 (Project/Artifact/AuditEvent tables, ledger 2, `state.sqlite3` kept)
+- [x] 2.2 RED: populated v0.1 table → `LegacySchemaData`, no DDL, rows/ledger unchanged
+- [x] 2.3 RED: `config.rs` — v1 config without dir fields loads defaults, bytes unchanged
+- [x] 2.4 RED: `paths.rs` — create/repair 4 governed dirs; reject escaping target/symlink
+- [x] 2.5 GREEN: `sqlite.rs` — v2 migration transaction: row-count guard → FK-safe drop → create v2 → ledger 2
+- [x] 2.6 GREEN: `config.rs` — serde defaults `artifacts_dir`/`inbox_dir`/`tmp_dir`/`trash_dir`
+- [x] 2.7 GREEN: `paths.rs` — governed-dir repair with containment validation
+- [x] 2.8 GREEN: `infrastructure/mod.rs` — export `hash`; gate clippy/fmt
 
 ## Phase 3: Project Use Cases and CLI (PR 3)
 
-- [ ] 3.1 RED: `application.rs` — `add_project` derives slug, persists, reports
-- [ ] 3.2 RED: slug collision → `slug_conflict`, no insert
-- [ ] 3.3 RED: `show_project` prefix resolve (not-found/ambiguous), `root_path` metadata only, no external write; `list_projects` deterministic
-- [ ] 3.4 RED: `crates/awctl/tests/cli.rs` — JSON envelope `{schemaVersion:1, ok, data|error}`, exits 0/1/2/3
-- [ ] 3.5 GREEN: `application.rs` — `add_project`/`list_projects`/`show_project`
-- [ ] 3.6 GREEN: `main.rs` — `project add/list/show` parsing + human/JSON views
-- [ ] 3.7 GREEN: `cli.rs` integration tests wired; gate clippy/fmt
+- [x] 3.1 RED: `application.rs` — `add_project` derives slug, persists, reports
+- [x] 3.2 RED: slug collision → `slug_conflict`, no insert
+- [x] 3.3 RED: `show_project` prefix resolve (not-found/ambiguous), `root_path` metadata only, no external write; `list_projects` deterministic
+- [x] 3.4 RED: `crates/awctl/tests/cli.rs` — JSON envelope `{schemaVersion:1, ok, data|error}`, exits 0/1/2/3
+- [x] 3.5 GREEN: `application.rs` — `add_project`/`list_projects`/`show_project`
+- [x] 3.6 GREEN: `main.rs` — `project add/list/show` parsing + human/JSON views
+- [x] 3.7 GREEN: `cli.rs` integration tests wired; gate clippy/fmt
 
 ## Phase 4: Verification
 
-- [ ] 4.1 `cargo test --workspace` + `cargo check --workspace` + `cargo fmt --check` all green
-- [ ] 4.2 Manual smoke: `awctl init` twice (repair), `project add/show/list` human+JSON — confirm dirs, exits, no external-root write
+- [x] 4.1 `cargo test --workspace` + `cargo check --workspace` + `cargo fmt --check` all green
+- [x] 4.2 Manual smoke: `awctl init` twice (repair), `project add/show/list` human+JSON — confirm dirs, exits, no external-root write

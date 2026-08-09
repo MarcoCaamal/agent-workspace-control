@@ -1,0 +1,75 @@
+schema: spec-driven
+project: agent-workspace-control
+artifact_store:
+  mode: hybrid
+execution:
+  mode: interactive
+  delivery_strategy: ask-on-risk
+  review_budget_lines: 400
+strict_tdd: false
+
+context: |
+  Lifecycle: foundation; no application source or Cargo manifest exists yet.
+  Intended stack: Rust, not yet initialized in the project.
+  Architecture: not established.
+  Testing: no project test runner, test layers, or coverage configuration detected.
+  Toolchain: rustc 1.92.0, cargo 1.92.0, rustfmt 1.8.0, clippy 0.1.92 installed on the host.
+  Repository: the directory is not a Git work tree.
+
+testing:
+  detected: 2026-08-08
+  strict_tdd: false
+  strict_tdd_reason: No project test runner is configured because Cargo.toml and source targets are absent.
+  manifest: null
+  runner:
+    available: false
+    framework: null
+    command: null
+  layers:
+    unit: { available: false, tool: null }
+    integration: { available: false, tool: null }
+    e2e: { available: false, tool: null }
+  coverage:
+    available: false
+    command: null
+  quality:
+    linter:
+      installed: true
+      configured: false
+      tool: clippy 0.1.92
+      command: null
+    type_checker:
+      installed: true
+      configured: false
+      tool: rustc 1.92.0
+      command: null
+    formatter:
+      installed: true
+      configured: false
+      tool: rustfmt 1.8.0
+      command: null
+
+rules:
+  proposal:
+    - State foundation scope, risks, and rollback or abandonment criteria.
+    - Ask before accepting risks under the ask-on-risk delivery strategy.
+  specs:
+    - Use RFC 2119 keywords and Given/When/Then scenarios.
+  design:
+    - Record architecture decisions and their rationale.
+    - Keep planned review units within 400 changed lines or flag a chained-delivery risk.
+  tasks:
+    - Group work by phase with hierarchical numbering.
+    - Keep tests and documentation in the same reviewable work unit as their implementation.
+  apply:
+    tdd: false
+    test_command: ""
+    guidelines:
+      - Do not claim project commands until the Rust workspace and scripts exist.
+      - Re-detect testing capabilities after the Cargo workspace is initialized.
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas.

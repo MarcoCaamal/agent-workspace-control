@@ -19,22 +19,23 @@ pub fn init(start: &Path) -> Result<CommandResult, AwcError> {
     let state_dir = root.join(WORKSPACE_DIR_NAME);
 
     let mut created_state_dir = false;
-    match fs::symlink_metadata(&state_dir) {
-        Ok(meta) => {
-            if !meta.is_dir() {
-                return Err(AwcError::UnsafeStatePath);
-            }
-            let canonical_state = fs::canonicalize(&state_dir).map_err(AwcError::Io)?;
-            if !canonical_state.starts_with(&root) {
-                return Err(AwcError::UnsafeStatePath);
-            }
+    let state_dir = match fs::symlink_metadata(&state_dir) {
+        Ok(_) => {
+            // Accept a real directory or a `.awc` symlink whose canonical
+            // target stays inside the root; reject anything escaping or not
+            // a directory (same check discovery uses). Every later write
+            // uses this validated canonical path, so retargeting the
+            // `.awc` symlink cannot redirect config/database writes
+            // outside the workspace.
+            paths::canonicalize_state_within(&root, &state_dir)?
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir_all(&state_dir).map_err(AwcError::Io)?;
             created_state_dir = true;
+            state_dir
         }
         Err(err) => return Err(AwcError::Io(err)),
-    }
+    };
 
     let config = match config::load_or_create(&state_dir) {
         Ok(config) => config,
@@ -295,5 +296,40 @@ mod tests {
         assert_eq!(fs::read(&marker).unwrap(), b"untouched");
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn init_accepts_contained_state_symlink() {
+        let root = temp_dir("init-contained-link");
+        let target = root.join("state").join("awc");
+        fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &root.join(WORKSPACE_DIR_NAME)).unwrap();
+
+        let CommandResult::Init(init) = init(&root).expect("init accepts a contained symlink")
+        else {
+            panic!("expected Init result");
+        };
+        let canonical = fs::canonicalize(&root).unwrap();
+        assert_eq!(init.root, canonical);
+        assert!(init.database_ok && init.schema_ok);
+        // Config and database land at the canonical target, not beside the link.
+        assert!(target.join(CONFIG_FILE_NAME).exists());
+        assert!(target.join("state.sqlite3").exists());
+        // The `.awc` entry itself stays a symlink: init wrote through the
+        // validated canonical target, never replacing the link.
+        let meta = fs::symlink_metadata(&root.join(WORKSPACE_DIR_NAME)).unwrap();
+        assert!(meta.file_type().is_symlink());
+
+        // Read-only commands agree on the symlinked state.
+        let CommandResult::Status(status) = status(&root).expect("status") else {
+            panic!("expected Status result");
+        };
+        assert!(status.database_ok && status.schema_ok);
+        let CommandResult::Doctor(doctor) = doctor_quick(&root).expect("doctor") else {
+            panic!("expected Doctor result");
+        };
+        assert_eq!(doctor.checks.iter().filter(|c| c.ok).count(), 4);
+        fs::remove_dir_all(&root).ok();
     }
 }

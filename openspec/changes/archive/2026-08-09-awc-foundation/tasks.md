@@ -69,3 +69,7 @@ Chain strategy: pending
 - [x] 6.2 Full `cargo test --workspace`, `cargo clippy --workspace -D warnings`, `cargo fmt --check`; fix findings
 
 Threat matrix: all rows N/A — no RED tests.
+
+## Phase 7: Post-Verification Adjustment (maintainer-approved)
+
+- [x] 7.1 `symlink-init-alignment`: `init` accepts a `.awc` symlink whose canonical target remains contained within the workspace root (shared `paths::canonicalize_state_within` containment check); escaping symlinks still rejected before use; RED regression tests prove both polarities

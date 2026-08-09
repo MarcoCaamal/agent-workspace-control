@@ -413,3 +413,59 @@ Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
 - **All 22/22 tasks complete.** Next phase: **verify** (sdd-verify), NOT archive — archive only after verification passes.
 - No commit/push/PR performed (lifecycle actions require parent receipt validation).
 - Engram refreshed in the same run: `sdd/awc-foundation/tasks` (#331), `sdd/awc-foundation/apply-progress` (#333), `sdd/agent-workspace-control/testing-capabilities` (#320).
+
+# Apply Progress: AWC Foundation — Slice 8 (Post-Verification Adjustment)
+
+- **Work unit**: `symlink-init-alignment` (runtime attempt ordinal 9 — maintainer-approved post-verification adjustment; not a new PR slice)
+- **Mode**: Standard (strict_tdd: false); behavior-first RED → GREEN for this bug fix
+- **Delivery**: ask-on-risk resolved → feature-branch-chain; adjustment applied on the current child branch `feature/awc-foundation-07-hygiene`; no commit/push/PR performed
+- **Date**: 2026-08-09
+
+## Adjustment Task (7.1)
+
+- [x] 7.1 `symlink-init-alignment`: `init` accepts a `.awc` symlink whose canonical target remains contained within the workspace root; escaping symlinks still rejected before use; regression tests prove both polarities
+
+## Diagnosis
+
+`init` validated an existing `.awc` with `symlink_metadata(...).is_dir()`, which is always false for a symlink itself — so init rejected even a contained `.awc` symlink, while `discover_with_root` (which canonicalizes and checks the target) accepted it. Fix: extracted the established canonical containment check into `paths::canonicalize_state_within(root, state)` (canonicalize → `starts_with(root)` → `is_dir()` → `UnsafeStatePath`) and used it from both `discover_with_root` and `init`. No weaker path checks were added; escaping rejection and no-write safety are preserved (escaping-symlink marker byte-asserted untouched).
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awc-core/src/infrastructure/paths.rs` | Modified | Extracted `canonicalize_state_within(root, state)` — the single canonical containment check — and used it inside `discover_with_root` (behavior unchanged; 8 existing tests green) |
+| `crates/awc-core/src/application.rs` | Modified | `init` existing-state branch now calls `paths::canonicalize_state_within(&root, &state_dir)` instead of rejecting on `symlink_metadata(...).is_dir()`; added RED-first regression test `init_accepts_contained_state_symlink` (init + status + doctor over a contained symlink; config/db land at the canonical target) |
+| `openspec/changes/awc-foundation/tasks.md` | Modified | Phase 7 adjustment task 7.1 → `[x]` |
+| `openspec/changes/awc-foundation/apply-progress.md` | Modified | Slice 8 section appended (slices 1–8 cumulative; prior slice history untouched) |
+| `openspec/changes/awc-foundation/verify-report.md` | Untouched | Stale after this adjustment — verification must be re-run before archive; not hand-edited as if final verification passed |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awc-core init_accepts_contained_state_symlink` → `FAILED. 0 passed; 1 failed` (init rejected the contained symlink). GREEN: same command → `ok. 1 passed; 0 failed`; `cargo test -p awc-core paths` → `ok. 8 passed; 0 failed`; `cargo test -p awc-core application` → `ok. 8 passed; 0 failed` |
+| Runtime harness command/scenario and exact result | Real CLI smoke (kernel symlink resolution): contained `.awc` → `awctl init --json` exit 0, `ok:true`, `config.toml` + `state.sqlite3` created at the canonical target; escaping `.awc` → exit 1, JSON `{"code":"unsafe_state_path",...}`, target marker byte-untouched and no state written |
+| Rollback boundary | Revert `application.rs` (new test + init branch) and `paths.rs` (helper + `discover_with_root` use) — 2 files; revert tasks.md task 7.1 checkbox and this Slice 8 section. No other code touched; Cargo.lock untouched |
+
+## Changed-Line Estimate
+
+- Authored: **~150** (paths.rs ±20, application.rs 52 changed incl. 32-line regression test, tasks.md ~6, apply-progress.md ~50)
+- Generated: Cargo.lock — untouched
+- Budget: 400 hard → **OK** (well under; single focused adjustment)
+
+## Gates Run with Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test -p awc-core init_accepts_contained_state_symlink` (RED, before fix) | Exit 1; `0 passed; 1 failed` |
+| `cargo test -p awc-core init_accepts_contained_state_symlink` (GREEN, after fix) | Exit 0; `1 passed; 0 failed` |
+| `cargo test --workspace` | Exit 0; **36 passed** (30 awc-core + 6 awctl integration; 0 doc tests) |
+| `cargo clippy --workspace -- -D warnings` | Exit 0; zero warnings |
+| `cargo fmt --check` | Exit 0; clean |
+| `cargo check --workspace` | Exit 0; no warnings |
+
+## Remaining Work / Status
+
+- **22/22 original tasks complete + adjustment task 7.1 complete.** Verification is NOT current: `verify-report.md` predates this adjustment; re-run sdd-verify before archive.
+- No commit/push/PR performed (lifecycle actions require parent receipt validation).
+- Native attempt: attempt ordinal 9 active (`symlink-init-alignment`), objective generation 8, begin revision `sha256:6be2d4f9c533e3ebe05c3c94225fb2043a5e92e979a9e93b346eff13f7ae4075`; implementation + evidence complete, attempt finishing left to the parent orchestrator.

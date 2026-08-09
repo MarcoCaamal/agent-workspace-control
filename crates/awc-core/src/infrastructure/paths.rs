@@ -30,10 +30,7 @@ pub fn discover_with_root(start: &Path) -> Result<(PathBuf, PathBuf), AwcError> 
         match fs::symlink_metadata(&entry) {
             Ok(_) => {
                 let root = fs::canonicalize(&dir).map_err(AwcError::Io)?;
-                let state = fs::canonicalize(&entry).map_err(AwcError::Io)?;
-                if !state.starts_with(&root) || !state.is_dir() {
-                    return Err(AwcError::UnsafeStatePath);
-                }
+                let state = canonicalize_state_within(&root, &entry)?;
                 return Ok((root, state));
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
@@ -44,6 +41,21 @@ pub fn discover_with_root(start: &Path) -> Result<(PathBuf, PathBuf), AwcError> 
             None => return Err(AwcError::WorkspaceNotFound),
         }
     }
+}
+
+/// Canonicalizes `state` and verifies it stays within the canonical `root`
+/// and is a directory, returning the canonical state path.
+///
+/// This is the single established containment check used by both discovery
+/// and `init`: a `.awc` symlink is accepted only when its canonical target
+/// remains inside the workspace root; an escaping, broken, or non-directory
+/// state path fails with [`AwcError::UnsafeStatePath`] without use.
+pub(crate) fn canonicalize_state_within(root: &Path, state: &Path) -> Result<PathBuf, AwcError> {
+    let canonical_state = fs::canonicalize(state).map_err(AwcError::Io)?;
+    if !canonical_state.starts_with(root) || !canonical_state.is_dir() {
+        return Err(AwcError::UnsafeStatePath);
+    }
+    Ok(canonical_state)
 }
 
 #[cfg(all(test, unix))]

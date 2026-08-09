@@ -58,5 +58,5 @@ Chain strategy: feature-branch-chain
 
 ## Phase 4: Verification
 
-- [ ] 4.1 `cargo test --workspace` + `cargo check --workspace` + `cargo fmt --check` all green
-- [ ] 4.2 Manual smoke: `awctl init` twice (repair), `project add/show/list` human+JSON — confirm dirs, exits, no external-root write
+- [x] 4.1 `cargo test --workspace` + `cargo check --workspace` + `cargo fmt --check` all green
+- [x] 4.2 Manual smoke: `awctl init` twice (repair), `project add/show/list` human+JSON — confirm dirs, exits, no external-root write

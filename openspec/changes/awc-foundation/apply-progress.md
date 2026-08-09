@@ -71,3 +71,67 @@ Threat matrix: all rows N/A (design), no RED tests required for this slice.
 - rusqlite 0.32.1 pins libsqlite3-sys 0.30.1 (bundled) — verified compiles on this host.
 - Edition 2024 (resolver 3) — verified compatible with toolchain rustc/cargo 1.92.0.
 - None blocking this slice.
+
+# Apply Progress: AWC Foundation — Slice 2 (PR 2)
+
+- **Work unit**: `slice-2-core-config` (runtime attempt ordinal 2)
+- **Mode**: Standard (strict_tdd: false); behavior-first RED → GREEN followed for this unit
+- **Delivery**: chained (user-resolved) → feature-branch-chain; current child branch `feature/awc-foundation-02-config`
+- **Date**: 2026-08-09
+
+## Tasks Completed (2.1–2.4)
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 2.1 | RED: unit tests — invalid TOML, unknown `schema_version`, byte-preserving round trip | [x] |
+| 2.2 | `error.rs`: `AwcError` variants per design contract | [x] |
+| 2.3 | `domain.rs`: Workspace, Config, CheckResult, Status, CommandResult, InitStatus | [x] |
+| 2.4 | `config.rs`: validate, preserve valid bytes, atomic write, reject unknown versions | [x] |
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awc-core/src/error.rs` | Created | `AwcError` (7 variants per design), safe Display, `source()`, `From<io::Error>`/`From<rusqlite::Error>`, `exit_code()` (Usage=2, WorkspaceNotFound=3, others=1) |
+| `crates/awc-core/src/domain.rs` | Created | `CONFIG_SCHEMA_VERSION=1`, `DEFAULT_DATABASE_FILE`, `Config` (serde, deny-free version gate), `Workspace`, `CheckResult`, `Status`, `InitStatus`, `CommandResult{Init,Status}` (Doctor variant deferred to Phase 4 with QuickDoctor) |
+| `crates/awc-core/src/infrastructure/mod.rs` | Created | `pub mod config;` — paths/sqlite modules land in slices 3–4 |
+| `crates/awc-core/src/infrastructure/config.rs` | Created | `CONFIG_FILE_NAME`, `parse_config` (UTF-8 + TOML → InvalidConfig; version gate → UnsupportedConfigVersion), `default_config_bytes`, `write_config_atomic` (tmp + fsync + rename, tmp cleaned on failure), `load_or_create` (preserves valid bytes; creates default atomically) + 6 RED-first tests |
+| `crates/awc-core/src/lib.rs` | Modified | Module wiring `domain`/`error`/`infrastructure`; root re-exports; `crate_name()` kept for awctl stub |
+| `openspec/changes/awc-foundation/tasks.md` | Modified | Checkboxes 2.1–2.4 → `[x]` |
+| `openspec/changes/awc-foundation/apply-progress.md` | Modified | Slice 2 section appended (this file) |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awc-core config` → `FAILED. 0 passed; 6 failed` (todo!() stubs). GREEN: same command → `ok. 6 passed; 0 failed` covering invalid TOML, missing fields, schema_version 0/2/99 rejection, comment-bearing byte preservation, atomic byte round trip, default creation idempotence |
+| Runtime harness command/scenario and exact result | `cargo test -p awc-core` → `ok. 6 passed; 0 failed` (full crate, incl. 0 doc tests). `cargo fmt --check` → clean after `cargo fmt`. No external runtime boundary in this slice (pure library units); temp-dir fixtures exercise the real filesystem path incl. atomic rename |
+| Rollback boundary | Delete `crates/awc-core/src/{error.rs,domain.rs,infrastructure/}`; restore `lib.rs` to 10-line stub; revert `tasks.md` checkboxes 2.1–2.4 and the Slice 2 section of `apply-progress.md`. Cargo.lock untouched (no dependency changes) |
+
+Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
+
+## Changed-Line Estimate
+
+- Authored: **342 code** (domain.rs 90, error.rs 84, config.rs 143, mod.rs 5, lib.rs 16 changed) + **4** tasks.md + ~45 apply-progress.md ≈ **~390** total
+- Generated: Cargo.lock — untouched this slice
+- Budget: 400 → risk: **OK** (slice is under budget)
+
+## Commands Run with Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test -p awc-core config` (RED, stubs) | Exit 1; `0 passed; 6 failed` — todo!() stubs prove tests fail first |
+| `cargo test -p awc-core config` (GREEN) | Exit 0; `ok. 6 passed; 0 failed` |
+| `cargo test -p awc-core` | Exit 0; `ok. 6 passed; 0 failed` |
+| `cargo fmt` / `cargo fmt --check` | Format normalized; `--check` exit 0 |
+
+## Remaining Work
+
+- Tasks 2.5–6.2 pending (18 tasks). Next work unit: Unit 3 — Discovery + symlink containment (PR 3; `cargo test -p awc-core paths`).
+- No commit/push/PR performed (lifecycle actions require parent receipt validation).
+
+## Risks
+
+- `CommandResult::Doctor(QuickDoctor)` deferred until Phase 4 (QuickDoctor not in task 2.3 type list) — design interface noted.
+- `openspec/changes/awc-foundation/tasks.md` line 12 still says `Chain strategy: pending` while Engram records resolved `feature-branch-chain`; only checkboxes updated per dispatcher instruction.
+- None blocking this slice.

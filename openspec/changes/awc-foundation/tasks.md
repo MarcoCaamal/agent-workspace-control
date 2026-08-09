@@ -38,10 +38,10 @@ Chain strategy: pending
 
 ## Phase 2: Core Contracts and Config
 
-- [ ] 2.1 RED: unit tests — invalid TOML, unknown `schema_version`, byte-preserving round trip
-- [ ] 2.2 Implement `error.rs`: `AwcError` variants per design contract
-- [ ] 2.3 Implement `domain.rs`: Workspace, Config, CheckResult, Status, CommandResult, InitStatus
-- [ ] 2.4 Implement `config.rs`: validate, preserve valid bytes, atomic write, reject unknown versions
+- [x] 2.1 RED: unit tests — invalid TOML, unknown `schema_version`, byte-preserving round trip
+- [x] 2.2 Implement `error.rs`: `AwcError` variants per design contract
+- [x] 2.3 Implement `domain.rs`: Workspace, Config, CheckResult, Status, CommandResult, InitStatus
+- [x] 2.4 Implement `config.rs`: validate, preserve valid bytes, atomic write, reject unknown versions
 - [ ] 2.5 RED: path tests — nearest ancestor, internal symlink accepted, escaping symlink rejected without target access
 - [ ] 2.6 Implement `paths.rs`: canonical start, nearest-first ancestor walk, canonical containment check
 

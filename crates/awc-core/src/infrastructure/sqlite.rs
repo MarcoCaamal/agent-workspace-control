@@ -1,9 +1,11 @@
 //! SQLite state backend: transactional, ordered migrations with a version ledger.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
+use uuid::Uuid;
 
+use crate::domain::{Project, ProjectId};
 use crate::error::AwcError;
 
 /// Ledger table recording every applied migration version.
@@ -83,6 +85,90 @@ pub fn open(path: &Path) -> Result<Connection, AwcError> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     Ok(conn)
+}
+
+/// Opens an existing database read-write without creating it: a missing
+/// state file is an error, never a silently created empty database.
+pub fn open_readwrite(path: &Path) -> Result<Connection, AwcError> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE,
+    )?)
+}
+
+const PROJECT_COLUMNS: &str = "id, slug, name, root_path, status";
+
+/// Parses the canonical hyphenated text form stored by v2 (rusqlite's
+/// `uuid` feature reads raw 16-byte blobs, which v2 does not use).
+fn parse_uuid(text: String) -> rusqlite::Result<Uuid> {
+    Uuid::parse_str(&text).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
+    })
+}
+
+/// Maps one v2 `projects` row to a typed project.
+fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
+    let root_path: Option<String> = row.get(3)?;
+    Ok(Project {
+        id: ProjectId(parse_uuid(row.get(0)?)?),
+        slug: row.get(1)?,
+        name: row.get(2)?,
+        root_path: root_path.map(PathBuf::from),
+        status: row.get(4)?,
+    })
+}
+
+/// Inserts a project; a slug collision fails before any insert (design:
+/// Create projects with deterministic slugs).
+pub fn insert_project(
+    conn: &mut Connection,
+    slug: &str,
+    name: &str,
+    root_path: Option<&Path>,
+) -> Result<Project, AwcError> {
+    let tx = conn.transaction()?;
+    let exists: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM projects WHERE slug = ?1",
+        [slug],
+        |row| row.get(0),
+    )?;
+    if exists > 0 {
+        return Err(AwcError::SlugConflict(slug.to_string()));
+    }
+    let id = ProjectId::new();
+    let project = tx.query_row(
+        &format!(
+            "INSERT INTO projects (id, slug, name, root_path) VALUES (?1, ?2, ?3, ?4) \
+             RETURNING {PROJECT_COLUMNS}"
+        ),
+        rusqlite::params![
+            id.0.to_string(),
+            slug,
+            name,
+            root_path.map(|p| p.to_string_lossy().to_string())
+        ],
+        row_to_project,
+    )?;
+    tx.commit()?;
+    Ok(project)
+}
+
+/// Candidate projects whose id starts with `prefix` (all rows when the
+/// prefix is empty), in deterministic id order. The exact-one selection
+/// rule lives in the application layer (design: Identity and lookup).
+pub fn select_projects_by_id_prefix(
+    conn: &Connection,
+    prefix: &str,
+) -> Result<Vec<Project>, AwcError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {PROJECT_COLUMNS} FROM projects WHERE id LIKE ?1 || '%' ORDER BY id"
+    ))?;
+    let mut rows = stmt.query([prefix])?;
+    let mut projects = Vec::new();
+    while let Some(row) = rows.next()? {
+        projects.push(row_to_project(row)?);
+    }
+    Ok(projects)
 }
 
 /// Applies pending migrations in version order, each inside its own

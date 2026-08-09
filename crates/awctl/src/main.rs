@@ -1,11 +1,11 @@
 //! `awctl` — AWC command-line boundary: parsing, deterministic JSON/human
 //! rendering, and exit codes (0 success, 1 operational, 2 usage, 3 not-found).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use awc_core::{
     application,
-    domain::{CheckResult, CommandResult},
+    domain::{AddProject, CheckResult, CommandResult, Project},
     error::AwcError,
 };
 use clap::{Parser, Subcommand};
@@ -31,6 +31,34 @@ enum Command {
         #[arg(long, required = true)]
         quick: bool,
     },
+    /// Manage projects.
+    Project {
+        #[command(subcommand)]
+        action: ProjectCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectCommand {
+    /// Add a project; the slug derives from the name unless --slug is given.
+    Add {
+        /// Project name.
+        #[arg(long)]
+        name: String,
+        /// Explicit canonical slug, validated by the slug rules.
+        #[arg(long)]
+        slug: Option<String>,
+        /// External root path — stored as metadata only, never written.
+        #[arg(long)]
+        root_path: Option<PathBuf>,
+    },
+    /// List all projects in slug order.
+    List,
+    /// Show one project by ID or unique prefix.
+    Show {
+        /// Project ID or unique prefix.
+        id: String,
+    },
 }
 
 fn main() {
@@ -40,6 +68,22 @@ fn main() {
         Command::Init => application::init(&cwd),
         Command::Status => application::status(&cwd),
         Command::Doctor { .. } => application::doctor_quick(&cwd),
+        Command::Project { action } => match action {
+            ProjectCommand::Add {
+                name,
+                slug,
+                root_path,
+            } => application::add_project(
+                &cwd,
+                AddProject {
+                    name,
+                    slug,
+                    root_path,
+                },
+            ),
+            ProjectCommand::List => application::list_projects(&cwd),
+            ProjectCommand::Show { id } => application::show_project(&cwd, &id),
+        },
     };
     match result {
         Ok(result) if cli.json => render_json(&result),
@@ -72,12 +116,39 @@ struct CheckView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProjectView {
+    id: String,
+    slug: String,
+    name: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    root_path: Option<String>,
+}
+
+fn project_view(p: &Project) -> ProjectView {
+    ProjectView {
+        id: p.id.0.to_string(),
+        slug: p.slug.clone(),
+        name: p.name.clone(),
+        status: p.status.clone(),
+        root_path: p.root_path.as_ref().map(|path| path.display().to_string()),
+    }
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 enum DataView {
     Workspace(WorkspaceView),
     Doctor {
         root: String,
         checks: Vec<CheckView>,
+    },
+    Project {
+        project: ProjectView,
+    },
+    ProjectList {
+        projects: Vec<ProjectView>,
     },
 }
 
@@ -98,12 +169,15 @@ struct JsonDoc {
     error: Option<ErrorView>,
 }
 
-/// Workspace summary for Init/Status, or None for Doctor.
+/// Workspace summary for Init/Status, or None for Doctor and project results.
 fn parts(result: &CommandResult) -> Option<(&Path, u32, bool, bool)> {
     match result {
         CommandResult::Init(s) => Some((&s.root, s.schema_version, s.database_ok, s.schema_ok)),
         CommandResult::Status(s) => Some((&s.root, s.schema_version, s.database_ok, s.schema_ok)),
-        CommandResult::Doctor(_) => None,
+        CommandResult::Doctor(_)
+        | CommandResult::ProjectAdded(_)
+        | CommandResult::ProjectList(_)
+        | CommandResult::ProjectShown(_) => None,
     }
 }
 
@@ -125,6 +199,14 @@ fn render_json(result: &CommandResult) {
         CommandResult::Doctor(d) => ok_doc(DataView::Doctor {
             root: d.root.display().to_string(),
             checks: d.checks.iter().map(check_view).collect(),
+        }),
+        CommandResult::ProjectAdded(p) | CommandResult::ProjectShown(p) => {
+            ok_doc(DataView::Project {
+                project: project_view(p),
+            })
+        }
+        CommandResult::ProjectList(projects) => ok_doc(DataView::ProjectList {
+            projects: projects.iter().map(project_view).collect(),
         }),
         r => ok_doc(ws(parts(r).expect("doctor handled"))),
     };
@@ -160,6 +242,20 @@ fn render_human(result: &CommandResult) {
                 }
             }
         }
+        CommandResult::ProjectAdded(p) => {
+            println!("project added: {} ({})", p.slug, p.name);
+            print_project(p);
+        }
+        CommandResult::ProjectShown(p) => {
+            println!("project: {} ({})", p.slug, p.name);
+            print_project(p);
+        }
+        CommandResult::ProjectList(projects) => {
+            println!("projects ({}):", projects.len());
+            for p in projects {
+                println!("  - {} ({})", p.slug, p.name);
+            }
+        }
         r => {
             let (root, v, db, schema) = parts(r).expect("doctor handled");
             println!("AWC workspace at {}", root.display());
@@ -167,6 +263,14 @@ fn render_human(result: &CommandResult) {
             println!("  database: {}", if db { "ok" } else { "unhealthy" });
             println!("  schema: {}", if schema { "ok" } else { "unhealthy" });
         }
+    }
+}
+
+fn print_project(p: &Project) {
+    println!("  id: {}", p.id.0);
+    println!("  status: {}", p.status);
+    if let Some(root) = &p.root_path {
+        println!("  root: {}", root.display());
     }
 }
 
@@ -182,6 +286,11 @@ fn render_error(json: bool, err: &AwcError) {
             }
             AwcError::Io(_) => ("io", err.to_string()),
             AwcError::Database(_) => ("database", err.to_string()),
+            AwcError::ProjectNotFound => ("project_not_found", err.to_string()),
+            AwcError::AmbiguousProjectId => ("ambiguous_project_id", err.to_string()),
+            AwcError::SlugConflict(_) => ("slug_conflict", err.to_string()),
+            AwcError::LegacySchemaData => ("legacy_schema_data", err.to_string()),
+            AwcError::InvalidSlug(_) => ("invalid_slug", err.to_string()),
         };
         write_json(&JsonDoc {
             schema_version: 1,

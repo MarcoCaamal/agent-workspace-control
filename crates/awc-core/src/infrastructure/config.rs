@@ -153,4 +153,37 @@ mod tests {
         assert_eq!(fs::read(dir.join(CONFIG_FILE_NAME)).unwrap(), bytes);
         fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn v1_config_without_dir_fields_loads_defaults_and_preserves_bytes() {
+        let bytes = b"schema_version = 1\ndatabase_file = \"state.sqlite3\"\n";
+        let config = parse_config(bytes).unwrap();
+        assert_eq!(config.schema_version, 1);
+        assert_eq!(config.database_file, "state.sqlite3");
+        assert_eq!(config.artifacts_dir, crate::domain::DEFAULT_ARTIFACTS_DIR);
+        assert_eq!(config.inbox_dir, crate::domain::DEFAULT_INBOX_DIR);
+        assert_eq!(config.tmp_dir, crate::domain::DEFAULT_TMP_DIR);
+        assert_eq!(config.trash_dir, crate::domain::DEFAULT_TRASH_DIR);
+
+        let dir = temp_dir("dir-defaults");
+        let path = dir.join(CONFIG_FILE_NAME);
+        fs::write(&path, bytes).unwrap();
+        load_or_create(&dir).unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            bytes,
+            "valid v1 bytes must be preserved"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn v1_config_with_custom_dir_fields_parses() {
+        let bytes = b"schema_version = 1\ndatabase_file = \"state.sqlite3\"\nartifacts_dir = \"data/art\"\ninbox_dir = \"data/in\"\ntmp_dir = \"scratch\"\ntrash_dir = \"trashcan\"\n";
+        let config = parse_config(bytes).unwrap();
+        assert_eq!(config.artifacts_dir, "data/art");
+        assert_eq!(config.inbox_dir, "data/in");
+        assert_eq!(config.tmp_dir, "scratch");
+        assert_eq!(config.trash_dir, "trashcan");
+    }
 }

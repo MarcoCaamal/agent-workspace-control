@@ -3,9 +3,10 @@
 //! - [`domain`] — workspace configuration and command result types
 //! - [`error`] — the shared `AwcError` with its exit-code contract
 //! - [`infrastructure::config`] — versioned TOML config parsing and writing
+//! - [`infrastructure::paths`] — upward discovery with symlink containment
 //!
-//! Discovery (`infrastructure::paths`), SQLite state (`infrastructure::sqlite`),
-//! and application use cases land in later work units.
+//! SQLite state (`infrastructure::sqlite`) and application use cases land in
+//! later work units.
 
 pub mod domain;
 pub mod error;

@@ -42,8 +42,8 @@ Chain strategy: pending
 - [x] 2.2 Implement `error.rs`: `AwcError` variants per design contract
 - [x] 2.3 Implement `domain.rs`: Workspace, Config, CheckResult, Status, CommandResult, InitStatus
 - [x] 2.4 Implement `config.rs`: validate, preserve valid bytes, atomic write, reject unknown versions
-- [ ] 2.5 RED: path tests — nearest ancestor, internal symlink accepted, escaping symlink rejected without target access
-- [ ] 2.6 Implement `paths.rs`: canonical start, nearest-first ancestor walk, canonical containment check
+- [x] 2.5 RED: path tests — nearest ancestor, internal symlink accepted, escaping symlink rejected without target access
+- [x] 2.6 Implement `paths.rs`: canonical start, nearest-first ancestor walk, canonical containment check
 
 ## Phase 3: SQLite Migrations
 

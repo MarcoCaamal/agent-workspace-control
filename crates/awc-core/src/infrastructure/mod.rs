@@ -1,5 +1,6 @@
 //! Infrastructure adapters: filesystem and state backends.
 //!
-//! `paths.rs` (discovery) and `sqlite.rs` (migrations) land in later slices.
+//! `sqlite.rs` (migrations) lands in a later slice.
 
 pub mod config;
+pub mod paths;

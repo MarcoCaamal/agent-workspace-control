@@ -135,3 +135,76 @@ Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
 - `CommandResult::Doctor(QuickDoctor)` deferred until Phase 4 (QuickDoctor not in task 2.3 type list) — design interface noted.
 - `openspec/changes/awc-foundation/tasks.md` line 12 still says `Chain strategy: pending` while Engram records resolved `feature-branch-chain`; only checkboxes updated per dispatcher instruction.
 - None blocking this slice.
+
+# Apply Progress: AWC Foundation — Slice 3 (PR 3)
+
+- **Work unit**: `slice-3-path-discovery` (runtime attempt ordinal 3)
+- **Mode**: Standard (strict_tdd: false); behavior-first RED → GREEN followed for this unit
+- **Delivery**: chained (user-resolved) → feature-branch-chain; current child branch `feature/awc-foundation-03-paths`
+- **Date**: 2026-08-09
+
+## Tasks Completed (2.5–2.6)
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 2.5 | RED: path tests — nearest ancestor, internal symlink accepted, escaping symlink rejected without target access | [x] |
+| 2.6 | `paths.rs`: canonical start, nearest-first ancestor walk, canonical containment check | [x] |
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awc-core/src/infrastructure/paths.rs` | Created | `WORKSPACE_DIR_NAME=".awc"`, `discover(start)`: canonicalize start, walk canonical ancestors nearest-first; `symlink_metadata` (no target read); canonicalize root+state; accept only `canonical_state.starts_with(canonical_root)` AND state is a dir; missing entry continues upward; escaping/broken/non-dir state fails (`UnsafeStatePath`) without target use; walk exhaustion → `WorkspaceNotFound` + 8 RED-first tests |
+| `crates/awc-core/src/infrastructure/mod.rs` | Modified | `pub mod paths;` wiring (sqlite deferred note) |
+| `crates/awc-core/src/lib.rs` | Modified | Doc: paths module listed as implemented; sqlite/application still later |
+| `openspec/changes/awc-foundation/tasks.md` | Modified | Checkboxes 2.5–2.6 → `[x]` |
+| `openspec/changes/awc-foundation/apply-progress.md` | Modified | Slice 3 section appended (this file) |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awc-core paths` → `FAILED. 0 passed; 8 failed` (todo!() stub). GREEN: same command → `ok. 8 passed; 0 failed` |
+| Runtime harness command/scenario and exact result | `cargo test -p awc-core` → `ok. 14 passed; 0 failed` (8 paths + 6 config; 0 doc tests). `cargo fmt --check` → clean (exit 0). Real symlink fixtures under `std::env::temp_dir()` exercise actual kernel symlink resolution incl. escaping targets (marker byte-asserted untouched) |
+| Rollback boundary | Delete `crates/awc-core/src/infrastructure/paths.rs`; revert `mod.rs`/`lib.rs` to slice-2 state; revert `tasks.md` checkboxes 2.5–2.6 and the Slice 3 section of `apply-progress.md`. Cargo.lock untouched (no dependency changes) |
+
+Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
+
+## Invariant Coverage (8 tests)
+
+- Nearest valid ancestor wins (`nearest_ancestor_wins`)
+- Missing `.awc` continues upward (`continues_upward_when_ancestor_missing`)
+- Internal symlink accepted, returns canonical target (`internal_symlink_returns_canonical_target`)
+- Escaping symlink rejected without target use — marker file byte-asserted untouched (`escaping_symlink_rejected_without_target_use`)
+- Existing escaping `.awc` fails instead of skipping to an outer valid workspace (`escaping_symlink_fails_instead_of_skipping_to_outer`)
+- No workspace → `WorkspaceNotFound`, `.awc` never created (`no_workspace_returns_not_found_without_creating_state`)
+- Canonical start: discovery via a symlinked parent resolves to the real workspace (`canonical_start_via_symlinked_parent`)
+- Non-directory `.awc` file → `UnsafeStatePath` (`plain_file_named_awc_is_rejected`)
+
+Note: non-directory `.awc` maps to `UnsafeStatePath` (same fail-don't-skip path as escaping); error variant's Display text is unchanged.
+
+## Changed-Line Estimate
+
+- Authored: **242** (paths.rs 175, mod.rs 3, lib.rs 5, tasks.md 4, apply-progress.md ≈55)
+- Generated: Cargo.lock — untouched this slice
+- Budget: 400 → risk: **OK** (slice is under budget; target ≤330 met)
+
+## Commands Run with Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test -p awc-core paths` (RED, stub) | Exit 1; `0 passed; 8 failed` — todo!() stub proves tests fail first |
+| `cargo test -p awc-core paths` (GREEN) | Exit 0; `ok. 8 passed; 0 failed` |
+| `cargo test -p awc-core` | Exit 0; `ok. 14 passed; 0 failed` (6 config + 8 paths) |
+| `cargo fmt --check` | Exit 0; clean (no fmt pass needed — files written formatted) |
+
+## Remaining Work
+
+- Tasks 3.1–6.2 pending (16 tasks). Next work unit: Unit 4 — SQLite migrations + repair (PR 4; `cargo test -p awc-core sqlite`).
+- No commit/push/PR performed (lifecycle actions require parent receipt validation).
+
+## Risks
+
+- Tests gated `#[cfg(all(test, unix))]` — symlink fixtures need a Unix filesystem; Linux is Tier 1 per design, macOS also covered.
+- `discover` returns the canonical state dir only; config parsing inside the workspace remains Phase 4's composition boundary (discovery never creates or reads config bytes).
+- None blocking this slice.

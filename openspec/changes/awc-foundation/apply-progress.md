@@ -208,3 +208,75 @@ Note: non-directory `.awc` maps to `UnsafeStatePath` (same fail-don't-skip path 
 - Tests gated `#[cfg(all(test, unix))]` — symlink fixtures need a Unix filesystem; Linux is Tier 1 per design, macOS also covered.
 - `discover` returns the canonical state dir only; config parsing inside the workspace remains Phase 4's composition boundary (discovery never creates or reads config bytes).
 - None blocking this slice.
+
+# Apply Progress: AWC Foundation — Slice 4 (PR 4)
+
+- **Work unit**: `slice-4-sqlite-migrations` (runtime attempt ordinal 4)
+- **Mode**: Standard (strict_tdd: false); behavior-first RED → GREEN followed for this unit
+- **Delivery**: chained (user-resolved) → feature-branch-chain; current child branch `feature/awc-foundation-04-sqlite`
+- **Date**: 2026-08-09
+
+## Tasks Completed (3.1–3.3)
+
+| Task | Description | Status |
+|------|-------------|--------|
+| 3.1 | RED: migration tests — `schema_migrations(version)` ledger, `projects`/`artifacts`/`audit_events`, rerun idempotent | [x] |
+| 3.2 | `sqlite.rs`: bundled rusqlite, transactional ordered migrations, schema health | [x] |
+| 3.3 | Repair test: valid config + missing DB → state restored, config bytes unchanged | [x] |
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awc-core/src/infrastructure/sqlite.rs` | Created | `MIGRATIONS_TABLE="schema_migrations"`, ordered `MIGRATIONS` (v1: projects/artifacts/audit_events with keys, timestamps, FKs), `open` (create-if-absent + `PRAGMA foreign_keys=ON`), `migrate` (ledger first, per-migration transactions, skip applied versions), `schema_health` (tables + ledger-authoritative version count) + 8 RED-first tests |
+| `crates/awc-core/src/infrastructure/mod.rs` | Modified | `pub mod sqlite;` wiring; doc note removed |
+| `crates/awc-core/src/lib.rs` | Modified | Doc: `infrastructure::sqlite` listed; only application use cases remain later |
+| `openspec/changes/awc-foundation/tasks.md` | Modified | Checkboxes 3.1–3.3 → `[x]` |
+| `openspec/changes/awc-foundation/apply-progress.md` | Modified | Slice 4 section appended (this file) |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awc-core sqlite` → `FAILED. 0 passed; 8 failed` (todo!() stubs). GREEN: same command → `ok. 8 passed; 0 failed` |
+| Runtime harness command/scenario and exact result | `cargo test -p awc-core` → `ok. 22 passed; 0 failed` (6 config + 8 paths + 8 sqlite; 0 doc tests). `cargo fmt` then `cargo fmt --check` → clean (exit 0). Real SQLite files in `std::env::temp_dir()` temp dirs exercise actual open/create/migrate/FK enforcement incl. drop-DB repair rerun |
+| Rollback boundary | Delete `crates/awc-core/src/infrastructure/sqlite.rs`; revert `mod.rs`/`lib.rs` wiring; revert `tasks.md` checkboxes 3.1–3.3 and the Slice 4 section of `apply-progress.md`. Cargo.lock untouched (no dependency changes) |
+
+Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
+
+## Invariant Coverage (8 tests)
+
+- Ledger + projects/artifacts/audit_events all created (`migrations_create_ledger_and_tables`)
+- Every version recorded in order 1..N (`migrations_record_every_version_in_order`)
+- Rerun idempotent: single ledger row, health still true (`migrate_rerun_is_idempotent`)
+- Foreign keys enforced: orphan artifact insert fails with FOREIGN KEY error (`foreign_keys_are_enforced`)
+- Health true after migrate (`schema_health_ok_after_migrate`); false on empty DB and on dropped table (`schema_health_false_when_state_missing`)
+- Ledger authoritative: recorded version not re-applied after table drop (`ledger_is_authoritative_over_table_existence`)
+- Repair: missing DB recreated+migrated, config bytes byte-identical before/after (`repair_recreates_missing_db_and_preserves_config_bytes`)
+
+## Changed-Line Estimate
+
+- Authored: **~311** (sqlite.rs 244, mod.rs 1, lib.rs 2, tasks.md 4, apply-progress.md ≈60)
+- Generated: Cargo.lock — untouched this slice
+- Budget: 400 → risk: **OK** (slice under budget; target ≤330 met)
+
+## Commands Run with Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test -p awc-core sqlite` (RED, stubs) | Exit 1; `0 passed; 8 failed` — todo!() stub proves tests fail first |
+| `cargo test -p awc-core sqlite` (GREEN) | Exit 0; `ok. 8 passed; 0 failed` |
+| `cargo test -p awc-core` | Exit 0; `ok. 22 passed; 0 failed` (6 config + 8 paths + 8 sqlite) |
+| `cargo fmt` / `cargo fmt --check` | Format normalized; `--check` exit 0 |
+
+## Remaining Work
+
+- Tasks 4.1–6.2 pending (13 tasks). Next work unit: Unit 5 — init/status/doctor_quick (PR 5; `cargo test -p awc-core`).
+- No commit/push/PR performed (lifecycle actions require parent receipt validation).
+
+## Risks
+
+- `migrate` takes `&mut Connection` (`transaction()` over `unchecked_transaction()`); schema_health stays `&Connection` for read-only status/doctor use.
+- Repair scope is module-level (open+migrate); full init composition (dir/config/db ordering, empty-dir removal) is Phase 4 task 4.1.
+- `schema_health` treats a missing ledger row as unhealthy (ledger authoritative) — documented, tested.
+- None blocking this slice.

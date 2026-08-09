@@ -4,9 +4,9 @@
 //! - [`error`] — the shared `AwcError` with its exit-code contract
 //! - [`infrastructure::config`] — versioned TOML config parsing and writing
 //! - [`infrastructure::paths`] — upward discovery with symlink containment
+//! - [`infrastructure::sqlite`] — transactional migrations with a version ledger
 //!
-//! SQLite state (`infrastructure::sqlite`) and application use cases land in
-//! later work units.
+//! Application use cases land in later work units.
 
 pub mod domain;
 pub mod error;

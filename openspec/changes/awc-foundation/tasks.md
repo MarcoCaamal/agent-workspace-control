@@ -47,9 +47,9 @@ Chain strategy: pending
 
 ## Phase 3: SQLite Migrations
 
-- [ ] 3.1 RED: migration tests — `schema_migrations(version)` ledger, `projects`/`artifacts`/`audit_events`, rerun idempotent
-- [ ] 3.2 Implement `sqlite.rs`: bundled rusqlite, transactional ordered migrations, schema health
-- [ ] 3.3 Repair test: valid config + missing DB → state restored, config bytes unchanged
+- [x] 3.1 RED: migration tests — `schema_migrations(version)` ledger, `projects`/`artifacts`/`audit_events`, rerun idempotent
+- [x] 3.2 Implement `sqlite.rs`: bundled rusqlite, transactional ordered migrations, schema health
+- [x] 3.3 Repair test: valid config + missing DB → state restored, config bytes unchanged
 
 ## Phase 4: Application Use Cases
 

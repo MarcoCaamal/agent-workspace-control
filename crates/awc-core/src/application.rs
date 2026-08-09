@@ -11,9 +11,12 @@ use crate::infrastructure::sqlite;
 
 /// Initializes the workspace at `start`: canonical root/state safety, create
 /// `.awc`, atomic default config only when absent (valid bytes preserved),
-/// then open and migrate the database. Failure before the config commit
-/// removes only an empty `.awc` created by this invocation; database
-/// failures after it propagate untouched (later `init` resumes recovery).
+/// open and migrate the database, then create or repair the four governed
+/// directories (`artifacts/`, `inbox/`, `tmp/`, `trash/` as configured or
+/// defaulted) with containment validation. Failure before the config commit
+/// removes only an empty `.awc` created by this invocation; database and
+/// governed-dir failures after it propagate untouched (later `init` resumes
+/// recovery).
 pub fn init(start: &Path) -> Result<CommandResult, AwcError> {
     let root = fs::canonicalize(start).map_err(AwcError::Io)?;
     let state_dir = root.join(WORKSPACE_DIR_NAME);
@@ -52,6 +55,18 @@ pub fn init(start: &Path) -> Result<CommandResult, AwcError> {
     let mut conn = sqlite::open(&state_dir.join(&config.database_file))?;
     sqlite::migrate(&mut conn)?;
     let schema_ok = sqlite::schema_health(&conn)?;
+
+    // Governed directories live at the workspace root; each is created when
+    // missing and validated for containment when present (design: Config and
+    // paths). An escaping entry fails the whole init without any use.
+    for name in [
+        &config.artifacts_dir,
+        &config.inbox_dir,
+        &config.tmp_dir,
+        &config.trash_dir,
+    ] {
+        paths::ensure_governed_dir(&root, name)?;
+    }
 
     Ok(CommandResult::Init(InitStatus {
         root,
@@ -331,5 +346,48 @@ mod tests {
         };
         assert_eq!(doctor.checks.iter().filter(|c| c.ok).count(), 4);
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn init_creates_and_repairs_governed_dirs_preserving_config() {
+        let root = temp_dir("gov-dirs");
+        init(&root).expect("init");
+        for name in ["artifacts", "inbox", "tmp", "trash"] {
+            assert!(root.join(name).is_dir(), "missing governed dir {name}");
+        }
+        let state = fs::canonicalize(root.join(WORKSPACE_DIR_NAME)).unwrap();
+        let config_bytes = fs::read(state.join(CONFIG_FILE_NAME)).unwrap();
+        for name in ["artifacts", "tmp"] {
+            fs::remove_dir_all(root.join(name)).unwrap();
+        }
+
+        init(&root).expect("re-init repairs governed dirs");
+        for name in ["artifacts", "inbox", "tmp", "trash"] {
+            assert!(root.join(name).is_dir(), "missing governed dir {name}");
+        }
+        assert_eq!(
+            fs::read(state.join(CONFIG_FILE_NAME)).unwrap(),
+            config_bytes,
+            "valid config bytes must be unchanged"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn init_rejects_escaping_governed_symlink() {
+        let root = temp_dir("gov-escape-init");
+        let outside = temp_dir("gov-escape-init-target");
+        let marker = outside.join("marker.txt");
+        fs::write(&marker, b"untouched").unwrap();
+        std::os::unix::fs::symlink(&outside, &root.join("artifacts")).unwrap();
+
+        assert!(matches!(
+            init(&root).unwrap_err(),
+            AwcError::UnsafeStatePath
+        ));
+        assert_eq!(fs::read(&marker).unwrap(), b"untouched");
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
     }
 }

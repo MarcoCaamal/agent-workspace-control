@@ -37,14 +37,14 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2: Foundation — Migration, Config, Paths (PR 2)
 
-- [ ] 2.1 RED: `sqlite.rs` — empty v0.1 migrates to v2 (Project/Artifact/AuditEvent tables, ledger 2, `state.sqlite3` kept)
-- [ ] 2.2 RED: populated v0.1 table → `LegacySchemaData`, no DDL, rows/ledger unchanged
-- [ ] 2.3 RED: `config.rs` — v1 config without dir fields loads defaults, bytes unchanged
-- [ ] 2.4 RED: `paths.rs` — create/repair 4 governed dirs; reject escaping target/symlink
-- [ ] 2.5 GREEN: `sqlite.rs` — v2 migration transaction: row-count guard → FK-safe drop → create v2 → ledger 2
-- [ ] 2.6 GREEN: `config.rs` — serde defaults `artifacts_dir`/`inbox_dir`/`tmp_dir`/`trash_dir`
-- [ ] 2.7 GREEN: `paths.rs` — governed-dir repair with containment validation
-- [ ] 2.8 GREEN: `infrastructure/mod.rs` — export `hash`; gate clippy/fmt
+- [x] 2.1 RED: `sqlite.rs` — empty v0.1 migrates to v2 (Project/Artifact/AuditEvent tables, ledger 2, `state.sqlite3` kept)
+- [x] 2.2 RED: populated v0.1 table → `LegacySchemaData`, no DDL, rows/ledger unchanged
+- [x] 2.3 RED: `config.rs` — v1 config without dir fields loads defaults, bytes unchanged
+- [x] 2.4 RED: `paths.rs` — create/repair 4 governed dirs; reject escaping target/symlink
+- [x] 2.5 GREEN: `sqlite.rs` — v2 migration transaction: row-count guard → FK-safe drop → create v2 → ledger 2
+- [x] 2.6 GREEN: `config.rs` — serde defaults `artifacts_dir`/`inbox_dir`/`tmp_dir`/`trash_dir`
+- [x] 2.7 GREEN: `paths.rs` — governed-dir repair with containment validation
+- [x] 2.8 GREEN: `infrastructure/mod.rs` — export `hash`; gate clippy/fmt
 
 ## Phase 3: Project Use Cases and CLI (PR 3)
 

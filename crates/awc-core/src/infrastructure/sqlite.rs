@@ -11,8 +11,11 @@ pub const MIGRATIONS_TABLE: &str = "schema_migrations";
 
 /// Ordered migrations; `index + 1` is the version number. Schema only — no
 /// lifecycle CRUD, APIs, or implicit records (design: Persistence/ledger).
+/// Version 2 is guarded: it runs only when every v0.1 foundation table is
+/// empty (see [`refuse_populated_legacy`]).
 const MIGRATIONS: &[&str] = &[
-    // v1: minimal projects/artifacts/audit_events with keys, timestamps, FKs.
+    // v1: minimal placeholder projects/artifacts/audit_events with keys,
+    // timestamps, and FKs. Replaced by v2 once proven empty.
     "CREATE TABLE projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL UNIQUE,
@@ -29,6 +32,39 @@ const MIGRATIONS: &[&str] = &[
         project_id INTEGER REFERENCES projects(id),
         event TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );",
+    // v2: complete Project/Artifact/AuditEvent metadata. Drop v1 tables in
+    // FK-safe order (children first) and create v2 atomically (design:
+    // Schema v2, Metadata before lifecycle).
+    "DROP TABLE IF EXISTS audit_events;
+    DROP TABLE IF EXISTS artifacts;
+    DROP TABLE IF EXISTS projects;
+    CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        slug TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        root_path TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        artifact_type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        path TEXT,
+        status TEXT NOT NULL DEFAULT 'tracked',
+        sha256 TEXT,
+        size INTEGER,
+        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE audit_events (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id),
+        artifact_id TEXT REFERENCES artifacts(id),
+        event_type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
     );",
 ];
 
@@ -51,7 +87,9 @@ pub fn open(path: &Path) -> Result<Connection, AwcError> {
 
 /// Applies pending migrations in version order, each inside its own
 /// transaction, recording every applied version in the ledger. Rerunning is
-/// idempotent; the ledger is authoritative.
+/// idempotent; the ledger is authoritative. Version 2 first refuses the
+/// migration when any v0.1 foundation table holds rows, leaving the database
+/// untouched (design: Schema v2).
 pub fn migrate(conn: &mut Connection) -> Result<(), AwcError> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
@@ -70,12 +108,30 @@ pub fn migrate(conn: &mut Connection) -> Result<(), AwcError> {
             continue;
         }
         let tx = conn.transaction()?;
+        if version == 2 {
+            refuse_populated_legacy(&tx)?;
+        }
         tx.execute_batch(sql)?;
         tx.execute(
             &format!("INSERT INTO {MIGRATIONS_TABLE} (version) VALUES (?1)"),
             [version],
         )?;
         tx.commit()?;
+    }
+    Ok(())
+}
+
+/// Refuses the v2 migration when any v0.1 foundation table holds rows. Runs
+/// before any DDL inside the migration transaction, so rejection rolls back
+/// without mutation: no schema change, no data change, ledger untouched.
+fn refuse_populated_legacy(tx: &rusqlite::Transaction<'_>) -> Result<(), AwcError> {
+    for table in ["projects", "artifacts", "audit_events"] {
+        let rows: i64 = tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
+        if rows > 0 {
+            return Err(AwcError::LegacySchemaData);
+        }
     }
     Ok(())
 }
@@ -166,7 +222,7 @@ mod tests {
         let mut conn = open(&dir.join("state.sqlite3")).expect("open db");
         migrate(&mut conn).expect("first migrate");
         migrate(&mut conn).expect("second migrate");
-        assert_eq!(ledger_versions(&conn), vec![1]);
+        assert_eq!(ledger_versions(&conn), vec![1, 2]);
         assert_eq!(schema_health(&conn).expect("health"), true);
         fs::remove_dir_all(&dir).ok();
     }
@@ -175,11 +231,14 @@ mod tests {
     fn foreign_keys_are_enforced() {
         let dir = temp_dir("fk");
         let conn = migrate_at(&dir);
-        conn.execute("INSERT INTO projects (name) VALUES ('demo')", [])
-            .expect("insert project");
+        conn.execute(
+            "INSERT INTO projects (id, slug, name) VALUES ('11111111-1111-7111-8111-111111111111', 'demo', 'Demo')",
+            [],
+        )
+        .expect("insert project");
         let err = conn
             .execute(
-                "INSERT INTO artifacts (project_id, name) VALUES (999, 'orphan')",
+                "INSERT INTO artifacts (id, project_id, artifact_type, title) VALUES ('22222222-2222-7222-8222-222222222222', '99999999-9999-7999-8999-999999999999', 'doc', 'orphan')",
                 [],
             )
             .expect_err("orphan artifact must violate the foreign key");
@@ -248,6 +307,94 @@ mod tests {
             assert_eq!(schema_health(&conn).expect("health"), true);
         }
         assert_eq!(fs::read(&config_path).expect("read config"), config_bytes);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Simulates a v0.1 workspace database: the ledger records version 1 and
+    /// the v1 foundation tables exist. `with_rows` also inserts one v1
+    /// project row so the schema-v2 guard has data to refuse.
+    fn v1_db(dir: &std::path::Path, with_rows: bool) -> Connection {
+        let conn = open(&dir.join("state.sqlite3")).expect("open db");
+        conn.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );"
+        ))
+        .expect("create ledger");
+        conn.execute_batch(MIGRATIONS[0]).expect("apply v1 schema");
+        conn.execute(
+            &format!("INSERT INTO {MIGRATIONS_TABLE} (version) VALUES (1)"),
+            [],
+        )
+        .expect("record v1 in ledger");
+        if with_rows {
+            conn.execute("INSERT INTO projects (name) VALUES ('legacy')", [])
+                .expect("populate a v1 project row");
+        }
+        conn
+    }
+
+    fn columns(conn: &Connection, table: &str) -> String {
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .expect("prepare pragma");
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .expect("query pragma")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect columns")
+            .join(",")
+    }
+
+    #[test]
+    fn migrate_v2_creates_full_metadata_schema_and_records_ledger() {
+        let dir = temp_dir("v2-shape");
+        let conn = migrate_at(&dir);
+        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        assert!(columns(&conn, "projects").contains("id,slug,name,root_path,status,created_at"));
+        assert!(
+            columns(&conn, "artifacts")
+                .contains("id,project_id,artifact_type,title,path,status,sha256,size")
+        );
+        assert!(
+            columns(&conn, "audit_events")
+                .contains("id,project_id,artifact_id,event_type,occurred_at")
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn empty_v1_database_migrates_to_v2() {
+        let dir = temp_dir("legacy-empty");
+        let mut conn = v1_db(&dir, false);
+        migrate(&mut conn).expect("empty v0.1 workspace migrates to v2");
+        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        assert_eq!(schema_health(&conn).expect("health"), true);
+        assert!(columns(&conn, "projects").contains("slug"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn populated_v1_table_rejects_v2_without_mutation() {
+        let dir = temp_dir("legacy-reject");
+        let mut conn = v1_db(&dir, true);
+        let err = migrate(&mut conn).expect_err("populated v0.1 data must refuse migration");
+        assert!(matches!(err, AwcError::LegacySchemaData));
+
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(rows, 1, "populated rows must be unchanged");
+        assert_eq!(ledger_versions(&conn), vec![1], "ledger must be unchanged");
+        assert_eq!(
+            schema_health(&conn).expect("health"),
+            false,
+            "v2 must not be recorded"
+        );
+        assert!(
+            !columns(&conn, "projects").contains("slug"),
+            "no v2 DDL may run"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

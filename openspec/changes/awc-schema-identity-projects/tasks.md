@@ -26,14 +26,14 @@ Chain strategy: feature-branch-chain
 
 ## Phase 1: Identity and Hash Primitives (PR 1)
 
-- [ ] 1.1 RED: `domain.rs` tests — UUIDv7 `ProjectId`/`ArtifactId`/`AuditEventId`; prefix resolve: 1 row selects, 0 → not-found, 2+ → ambiguous
-- [ ] 1.2 RED: `hash.rs` tests — SHA-256 lower-case 64-hex + exact byte count
-- [ ] 1.3 RED: slug tests — lowercase, non-alnum runs → single `-`, trimmed, empty rejected
-- [ ] 1.4 GREEN: `crates/awc-core/Cargo.toml` — add `uuid` (v7, serde), `sha2`
-- [ ] 1.5 GREEN: `domain.rs` — newtypes, `ContentFingerprint`, `derive_slug` rules
-- [ ] 1.6 GREEN: create `infrastructure/hash.rs` — synchronous fingerprint over reader
-- [ ] 1.7 GREEN: `error.rs` — add `project_not_found`, `ambiguous_project_id`, `slug_conflict`, `legacy_schema_data` (snake_case)
-- [ ] 1.8 Gate: `cargo clippy -p awc-core -- -D warnings`; `cargo fmt --check`
+- [x] 1.1 RED: `domain.rs` tests — UUIDv7 `ProjectId`/`ArtifactId`/`AuditEventId`; prefix resolve: 1 row selects, 0 → not-found, 2+ → ambiguous
+- [x] 1.2 RED: `hash.rs` tests — SHA-256 lower-case 64-hex + exact byte count
+- [x] 1.3 RED: slug tests — lowercase, non-alnum runs → single `-`, trimmed, empty rejected
+- [x] 1.4 GREEN: `crates/awc-core/Cargo.toml` — add `uuid` (v7, serde), `sha2`
+- [x] 1.5 GREEN: `domain.rs` — newtypes, `ContentFingerprint`, `derive_slug` rules
+- [x] 1.6 GREEN: create `infrastructure/hash.rs` — synchronous fingerprint over reader
+- [x] 1.7 GREEN: `error.rs` — add `project_not_found`, `ambiguous_project_id`, `slug_conflict`, `legacy_schema_data` (snake_case)
+- [x] 1.8 Gate: `cargo clippy -p awc-core -- -D warnings`; `cargo fmt --check`
 
 ## Phase 2: Foundation — Migration, Config, Paths (PR 2)
 

@@ -23,6 +23,17 @@ pub enum AwcError {
     Io(io::Error),
     /// Underlying SQLite error.
     Database(rusqlite::Error),
+    /// No project matches the supplied ID or prefix.
+    ProjectNotFound,
+    /// Two or more projects match a supplied ID prefix.
+    AmbiguousProjectId,
+    /// The derived or explicit slug collides with an existing project.
+    SlugConflict(String),
+    /// A v0.1 foundation table contains manually populated data; the
+    /// schema-v2 migration is refused without mutation.
+    LegacySchemaData,
+    /// The slug is empty or violates the canonical slug rules.
+    InvalidSlug(String),
 }
 
 impl AwcError {
@@ -57,6 +68,23 @@ impl fmt::Display for AwcError {
             ),
             AwcError::Io(err) => write!(f, "I/O error: {err}"),
             AwcError::Database(err) => write!(f, "database error: {err}"),
+            AwcError::ProjectNotFound => {
+                write!(f, "no project matches the given id or prefix")
+            }
+            AwcError::AmbiguousProjectId => {
+                write!(
+                    f,
+                    "ambiguous project id: multiple projects match the given prefix"
+                )
+            }
+            AwcError::SlugConflict(slug) => {
+                write!(f, "slug conflict: `{slug}` is already in use")
+            }
+            AwcError::LegacySchemaData => write!(
+                f,
+                "refusing migration: v0.1 foundation tables contain data; no changes were made"
+            ),
+            AwcError::InvalidSlug(msg) => write!(f, "invalid slug: {msg}"),
         }
     }
 }

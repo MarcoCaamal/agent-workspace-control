@@ -12,7 +12,10 @@ pub mod domain;
 pub mod error;
 pub mod infrastructure;
 
-pub use domain::{CheckResult, CommandResult, Config, InitStatus, QuickDoctor, Status, Workspace};
+pub use domain::{
+    ArtifactId, AuditEventId, CheckResult, CommandResult, Config, ContentFingerprint, InitStatus,
+    ProjectId, QuickDoctor, Status, Workspace,
+};
 pub use error::AwcError;
 
 /// Returns the crate name; lets the `awctl` stub prove the path dependency.

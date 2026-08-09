@@ -182,6 +182,11 @@ fn render_error(json: bool, err: &AwcError) {
             }
             AwcError::Io(_) => ("io", err.to_string()),
             AwcError::Database(_) => ("database", err.to_string()),
+            AwcError::ProjectNotFound => ("project_not_found", err.to_string()),
+            AwcError::AmbiguousProjectId => ("ambiguous_project_id", err.to_string()),
+            AwcError::SlugConflict(_) => ("slug_conflict", err.to_string()),
+            AwcError::LegacySchemaData => ("legacy_schema_data", err.to_string()),
+            AwcError::InvalidSlug(_) => ("invalid_slug", err.to_string()),
         };
         write_json(&JsonDoc {
             schema_version: 1,

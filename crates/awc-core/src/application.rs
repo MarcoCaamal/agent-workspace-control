@@ -3,7 +3,12 @@
 use std::fs;
 use std::path::Path;
 
-use crate::domain::{CheckResult, CommandResult, InitStatus, QuickDoctor, Status};
+use uuid::Uuid;
+
+use crate::domain::{
+    AddProject, CheckResult, CommandResult, InitStatus, QuickDoctor, Status, derive_slug,
+    resolve_id_prefix, validate_slug,
+};
 use crate::error::AwcError;
 use crate::infrastructure::config;
 use crate::infrastructure::paths::{self, WORKSPACE_DIR_NAME};
@@ -149,11 +154,62 @@ pub fn doctor_quick(start: &Path) -> Result<CommandResult, AwcError> {
     Ok(CommandResult::Doctor(QuickDoctor { root, checks }))
 }
 
+/// Persists a project: the slug derives from `name` unless an explicit slug
+/// is supplied (both validated by the same rules), `root_path` is stored as
+/// external metadata only, and the created project is reported.
+pub fn add_project(start: &Path, input: AddProject) -> Result<CommandResult, AwcError> {
+    let (_, state_dir) = paths::discover_with_root(start)?;
+    let config = config::load_readonly(&state_dir)?;
+    let slug = match &input.slug {
+        Some(slug) => {
+            validate_slug(slug)?;
+            slug.clone()
+        }
+        None => derive_slug(&input.name)?,
+    };
+    let mut conn = sqlite::open_readwrite(&state_dir.join(&config.database_file))?;
+    Ok(CommandResult::ProjectAdded(sqlite::insert_project(
+        &mut conn,
+        &slug,
+        &input.name,
+        input.root_path.as_deref(),
+    )?))
+}
+
+/// Lists all projects in deterministic slug order.
+pub fn list_projects(start: &Path) -> Result<CommandResult, AwcError> {
+    let (_, state_dir) = paths::discover_with_root(start)?;
+    let config = config::load_readonly(&state_dir)?;
+    let conn = sqlite::open_readonly(&state_dir.join(&config.database_file))?;
+    let mut projects = sqlite::select_projects_by_id_prefix(&conn, "")?;
+    projects.sort_by(|a, b| a.slug.cmp(&b.slug));
+    Ok(CommandResult::ProjectList(projects))
+}
+
+/// Shows one project resolved by ID prefix: exactly one match selects it,
+/// zero matches report not found, and two or more report ambiguity. The
+/// persisted `root_path` is external context metadata only — nothing is
+/// written there.
+pub fn show_project(start: &Path, id_or_prefix: &str) -> Result<CommandResult, AwcError> {
+    let (_, state_dir) = paths::discover_with_root(start)?;
+    let config = config::load_readonly(&state_dir)?;
+    let conn = sqlite::open_readonly(&state_dir.join(&config.database_file))?;
+    let candidates = sqlite::select_projects_by_id_prefix(&conn, id_or_prefix)?;
+    let ids: Vec<Uuid> = candidates.iter().map(|p| p.id.0).collect();
+    let id = resolve_id_prefix(id_or_prefix, &ids)?;
+    let project = candidates
+        .into_iter()
+        .find(|p| p.id.0 == id)
+        .ok_or(AwcError::ProjectNotFound)?;
+    Ok(CommandResult::ProjectShown(project))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::CONFIG_SCHEMA_VERSION;
+    use crate::domain::{CONFIG_SCHEMA_VERSION, Project};
     use crate::infrastructure::config::CONFIG_FILE_NAME;
+    use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("awc-core-app-{}-{name}", std::process::id()));
@@ -389,5 +445,138 @@ mod tests {
         assert_eq!(fs::read(&marker).unwrap(), b"untouched");
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
+    }
+
+    fn init_at(root: &Path) {
+        init(root).expect("init");
+    }
+
+    fn add(root: &Path, name: &str) -> Project {
+        match add_project(
+            root,
+            AddProject {
+                name: name.into(),
+                slug: None,
+                root_path: None,
+            },
+        ) {
+            Ok(CommandResult::ProjectAdded(p)) => p,
+            _ => panic!("add_project failed for {name}"),
+        }
+    }
+
+    #[test]
+    fn add_project_derives_slug_persists_and_reports() {
+        let root = temp_dir("proj-add");
+        init_at(&root);
+        let CommandResult::ProjectAdded(p) = add_project(
+            &root,
+            AddProject {
+                name: "My Cool  Project!".into(),
+                slug: None,
+                root_path: None,
+            },
+        )
+        .expect("add") else {
+            panic!("expected ProjectAdded");
+        };
+        assert_eq!(p.slug, "my-cool-project");
+        assert_eq!(p.name, "My Cool  Project!");
+        assert_eq!(p.status, "active");
+        assert_eq!(p.id.0.to_string().len(), 36);
+        assert!(p.root_path.is_none());
+
+        // An explicit slug bypasses derivation but follows the same rules;
+        // the external root_path is metadata only and is never written.
+        let CommandResult::ProjectAdded(p) = add_project(
+            &root,
+            AddProject {
+                name: "Weird".into(),
+                slug: Some("explicit-slug".into()),
+                root_path: Some(PathBuf::from("/does/not/exist")),
+            },
+        )
+        .expect("explicit slug") else {
+            panic!("expected ProjectAdded");
+        };
+        assert_eq!(p.slug, "explicit-slug");
+        assert_eq!(p.root_path, Some(PathBuf::from("/does/not/exist")));
+        assert!(
+            !p.root_path.unwrap().exists(),
+            "root_path is metadata only; never written"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn add_project_rejects_derived_and_explicit_slug_collisions() {
+        let root = temp_dir("proj-collide");
+        init_at(&root);
+        add(&root, "Alpha");
+        for input in [
+            AddProject {
+                name: "alpha".into(),
+                slug: None,
+                root_path: None,
+            },
+            AddProject {
+                name: "Beta".into(),
+                slug: Some("alpha".into()),
+                root_path: None,
+            },
+        ] {
+            let err = add_project(&root, input).expect_err("collision must fail");
+            assert!(matches!(err, AwcError::SlugConflict(_)));
+        }
+        let CommandResult::ProjectList(list) = list_projects(&root).expect("list") else {
+            panic!("expected ProjectList");
+        };
+        assert_eq!(list.len(), 1, "no insert on collision");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn show_project_resolves_prefixes_and_list_is_deterministic() {
+        let root = temp_dir("proj-show");
+        init_at(&root);
+        let a = add(&root, "Zulu");
+        let b = add(&root, "Alpha");
+        let id_a = a.id.0.to_string();
+        let id_b = b.id.0.to_string();
+        // A prefix matching exactly one project: the maximal common prefix
+        // plus the next character of `a` (which differs from `b`'s).
+        let common: String = id_a
+            .chars()
+            .zip(id_b.chars())
+            .take_while(|(x, y)| x == y)
+            .map(|(x, _)| x)
+            .collect();
+        let unique_a = format!("{}{}", common, &id_a[common.len()..common.len() + 1]);
+
+        let CommandResult::ProjectShown(p) = show_project(&root, &id_a).expect("full id") else {
+            panic!("expected ProjectShown");
+        };
+        assert_eq!(p.id, a.id);
+        let CommandResult::ProjectShown(p) = show_project(&root, &unique_a).expect("unique prefix")
+        else {
+            panic!("expected ProjectShown");
+        };
+        assert_eq!(p.id, a.id);
+
+        assert!(matches!(
+            show_project(&root, "ffffffff").expect_err("no match"),
+            AwcError::ProjectNotFound
+        ));
+        assert!(matches!(
+            show_project(&root, &common).expect_err("two matches"),
+            AwcError::AmbiguousProjectId
+        ));
+
+        let CommandResult::ProjectList(list) = list_projects(&root).expect("list") else {
+            panic!("expected ProjectList");
+        };
+        let slugs: Vec<&str> = list.iter().map(|p| p.slug.as_str()).collect();
+        assert_eq!(slugs, ["alpha", "zulu"], "deterministic slug order");
+        fs::remove_dir_all(&root).ok();
     }
 }

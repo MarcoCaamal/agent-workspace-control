@@ -144,3 +144,147 @@ fn operational_failure_exits_1_with_json_error() {
     }
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn project_add_derives_slug_json_and_human() {
+    let dir = temp_dir("padd");
+    run_in(&dir, &["init"]);
+    let out = run_in(
+        &dir,
+        &["project", "add", "--name", "My Cool  Project!", "--json"],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stderr.is_empty(), "no stderr on JSON success");
+    let project = envelope(true, &out)["data"]["project"].clone();
+    assert_eq!(project["slug"], "my-cool-project");
+    assert_eq!(project["name"], "My Cool  Project!");
+    assert_eq!(project["id"].as_str().unwrap().len(), 36);
+    let out = run_in(&dir, &["project", "add", "--name", "Second"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        String::from_utf8(out.stdout)
+            .unwrap()
+            .contains("project added: second (Second)")
+    );
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn project_add_slug_conflict_exits_1_without_insert() {
+    let dir = temp_dir("pconf");
+    run_in(&dir, &["init"]);
+    run_in(&dir, &["project", "add", "--name", "Alpha"]);
+    for args in [
+        &["project", "add", "--name", "alpha", "--json"][..],
+        &[
+            "project", "add", "--name", "Beta", "--slug", "alpha", "--json",
+        ][..],
+    ] {
+        let out = run_in(&dir, args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert_eq!(envelope(false, &out)["error"]["code"], "slug_conflict");
+    }
+    let out = run_in(&dir, &["project", "list", "--json"]);
+    let data = envelope(true, &out)["data"].clone();
+    let projects = data["projects"].as_array().unwrap();
+    assert_eq!(projects.len(), 1, "collision must not insert");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn project_show_resolves_prefix_and_rejects_not_found_or_ambiguous() {
+    let dir = temp_dir("pshow");
+    run_in(&dir, &["init"]);
+    let out = run_in(&dir, &["project", "add", "--name", "One", "--json"]);
+    let id_a = envelope(true, &out)["data"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = run_in(&dir, &["project", "add", "--name", "Two", "--json"]);
+    let id_b = envelope(true, &out)["data"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let common: String = id_a
+        .chars()
+        .zip(id_b.chars())
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x)
+        .collect();
+    let unique_a = format!("{}{}", common, &id_a[common.len()..common.len() + 1]);
+
+    let out = run_in(&dir, &["project", "show", &id_a, "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(envelope(true, &out)["data"]["project"]["slug"], "one");
+    let out = run_in(&dir, &["project", "show", &unique_a, "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(envelope(true, &out)["data"]["project"]["slug"], "one");
+
+    let out = run_in(&dir, &["project", "show", "ffffffff", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(envelope(false, &out)["error"]["code"], "project_not_found");
+
+    let out = run_in(&dir, &["project", "show", &common, "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        envelope(false, &out)["error"]["code"],
+        "ambiguous_project_id"
+    );
+
+    let out = run_in(&dir, &["project", "show", "ffffffff"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty(), "human errors go to stderr");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn project_list_is_deterministic_and_external_root_is_metadata_only() {
+    let dir = temp_dir("plist");
+    run_in(&dir, &["init"]);
+    for name in ["Zulu", "Alpha", "Mike"] {
+        run_in(&dir, &["project", "add", "--name", name]);
+    }
+    let outside =
+        std::env::temp_dir().join(format!("awctl-cli-{}-external-root", std::process::id()));
+    let _ = fs::remove_dir_all(&outside);
+    let out = run_in(
+        &dir,
+        &[
+            "project",
+            "add",
+            "--name",
+            "Ext",
+            "--root-path",
+            outside.to_str().unwrap(),
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let id_ext = envelope(true, &out)["data"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let out = run_in(&dir, &["project", "list", "--json"]);
+    let data = envelope(true, &out)["data"].clone();
+    let projects = data["projects"].as_array().unwrap();
+    let slugs: Vec<&str> = projects
+        .iter()
+        .map(|p| p["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(slugs, ["alpha", "ext", "mike", "zulu"]);
+
+    let out = run_in(&dir, &["project", "show", &id_ext, "--json"]);
+    assert_eq!(
+        envelope(true, &out)["data"]["project"]["rootPath"],
+        outside.to_string_lossy().as_ref()
+    );
+    assert!(
+        !outside.exists(),
+        "root_path is metadata only: no managed write"
+    );
+
+    let stdout = String::from_utf8(run_in(&dir, &["project", "list"]).stdout).unwrap();
+    assert!(stdout.contains("projects (4):") && stdout.contains("- alpha (Alpha)"));
+    fs::remove_dir_all(&dir).ok();
+}

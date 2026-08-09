@@ -245,12 +245,37 @@ pub struct QuickDoctor {
     pub checks: Vec<CheckResult>,
 }
 
+/// A persisted project (design: Metadata before lifecycle). `root_path` is
+/// optional external context metadata only — it never authorizes managed
+/// writes outside the AWC workspace root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Project {
+    pub id: ProjectId,
+    pub slug: String,
+    pub name: String,
+    pub root_path: Option<PathBuf>,
+    pub status: String,
+}
+
+/// Input to `add_project`: a name plus an optional explicit slug (which
+/// bypasses derivation but follows the same slug rules) and an optional
+/// external `root_path` stored as metadata only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddProject {
+    pub name: String,
+    pub slug: Option<String>,
+    pub root_path: Option<PathBuf>,
+}
+
 /// Typed outcome of a core command, rendered by `awctl` (Phase 5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
     Init(InitStatus),
     Status(Status),
     Doctor(QuickDoctor),
+    ProjectAdded(Project),
+    ProjectList(Vec<Project>),
+    ProjectShown(Project),
 }
 
 #[cfg(test)]

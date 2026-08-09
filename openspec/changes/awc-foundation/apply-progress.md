@@ -366,3 +366,50 @@ Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
 - Tasks 6.1–6.2 pending (2). Next: Unit 7 — testing refresh + hygiene (PR 7). No commit/push/PR performed (lifecycle actions require parent receipt validation).
 - Pre-existing awc-core unused-import warnings (`CONFIG_SCHEMA_VERSION`, `CONFIG_FILE_NAME` in application.rs, used only in tests) — clippy `-D warnings` (task 6.2) must address; NOT touched in this slice (out of scope).
 - Doctor JSON `message` passes core's detail string verbatim (may embed the state DB path) — core-authored, matches doctor's detail-string design; awctl renders as-is. `awctl doctor` without `--quick` is a clap usage error exit 2 (contract-compatible).
+# Apply Progress: AWC Foundation — Slice 7 (PR 7)
+
+- **Work unit**: `slice-7-delivery-hygiene` (attempt ordinal 8; previous attempts made zero changes, tree stayed clean); date 2026-08-09; Standard mode (strict_tdd: false)
+- **Delivery**: feature-branch-chain; child branch `feature/awc-foundation-07-hygiene` (base `feature/awc-foundation-06-cli`)
+
+## Tasks Completed (6.1–6.2) — ALL TASKS NOW 22/22
+
+- [x] 6.1 Refresh `openspec/config.yaml` testing block with detected commands (cargo test/clippy/fmt) post-bootstrap
+- [x] 6.2 Full `cargo test --workspace`, `cargo clippy --workspace -D warnings`, `cargo fmt --check`; fix findings
+
+## Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awc-core/src/application.rs` | Modified | Moved test-only constants into `#[cfg(test)] mod tests`: removed `CONFIG_SCHEMA_VERSION` from the `domain` import group and `CONFIG_FILE_NAME` from the `config` import; added `use crate::domain::CONFIG_SCHEMA_VERSION;` and `use crate::infrastructure::config::CONFIG_FILE_NAME;` inside the test module. Zero behavior change — both constants are referenced only in tests |
+| `openspec/config.yaml` | Modified | Refreshed stale pre-bootstrap facts: `context` (workspace exists, layered architecture, Git work tree on child branch), `testing` (manifest `Cargo.toml`; runner available `cargo test --workspace`; unit `cargo test -p awc-core`; integration `cargo test -p awctl`; e2e NOT claimed; coverage NOT claimed), `quality` (clippy/rustfmt/rustc configured with exact commands), `rules.apply.test_command` and `rules.verify.test_command/build_command` populated; guidelines forbid invented coverage/E2E claims |
+| `tasks.md`, `apply-progress.md` | Modified | Checkboxes 6.1–6.2 `[x]` (22/22); Slice 7 section appended (slices 1–7 cumulative) |
+
+## Work Unit Evidence
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | `cargo clippy --workspace -- -D warnings` → RED: exit 101, `error: unused import: CONFIG_SCHEMA_VERSION` + `error: unused import: CONFIG_FILE_NAME` (only findings). GREEN after import fix: exit 0, `Finished dev profile` — zero warnings |
+| Runtime harness command/scenario and exact result | Temp-workspace CLI smoke: `init --json` exit 0 single JSON doc stderr empty; `status --json` exit 0; `doctor --quick --json` exit 0 with checks ordered path/config/database/schema; `.awc` contains `config.toml` + `state.sqlite3`; temp dir removed afterward (no `.awc` runtime state committed) |
+| Rollback boundary | Revert `application.rs` import move (2-line change in tests module), `openspec/config.yaml` testing/context/rules blocks, `tasks.md` checkboxes 6.1–6.2, and this Slice 7 section. Cargo.lock untouched. No unrelated work removed |
+
+## Gates Run with Outcomes
+
+| Command | Outcome |
+|---------|---------|
+| `cargo test --workspace` | Exit 0; 35 passed (29 awc-core + 6 awctl integration; 0 doc tests) |
+| `cargo clippy --workspace -- -D warnings` | Exit 0 (was 101 pre-fix on the two test-only imports) |
+| `cargo fmt --check` | Exit 0; clean |
+| `cargo check --workspace` | Exit 0; no warnings (was 2 unused-import warnings pre-fix) |
+| Temp-workspace smoke (`init/status/doctor --quick --json`) | All exit 0; single JSON doc per command; `.awc` seeded correctly |
+
+## Changed-Line Estimate
+
+- Authored: **~90** (application.rs ±3, config.yaml ~42, tasks.md 2, apply-progress.md ≈45)
+- Generated: Cargo.lock — untouched this slice
+- Budget: 400 hard → **OK** (slice far under budget; final slice of the chain)
+
+## Remaining Work / Status
+
+- **All 22/22 tasks complete.** Next phase: **verify** (sdd-verify), NOT archive — archive only after verification passes.
+- No commit/push/PR performed (lifecycle actions require parent receipt validation).
+- Engram refreshed in the same run: `sdd/awc-foundation/tasks` (#331), `sdd/awc-foundation/apply-progress` (#333), `sdd/agent-workspace-control/testing-capabilities` (#320).

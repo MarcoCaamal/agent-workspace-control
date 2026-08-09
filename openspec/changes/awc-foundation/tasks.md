@@ -65,7 +65,7 @@ Chain strategy: pending
 
 ## Phase 6: Delivery Hygiene
 
-- [ ] 6.1 Refresh `openspec/config.yaml` testing block with detected commands (cargo test/clippy/fmt) post-bootstrap
-- [ ] 6.2 Full `cargo test --workspace`, `cargo clippy --workspace -D warnings`, `cargo fmt --check`; fix findings
+- [x] 6.1 Refresh `openspec/config.yaml` testing block with detected commands (cargo test/clippy/fmt) post-bootstrap
+- [x] 6.2 Full `cargo test --workspace`, `cargo clippy --workspace -D warnings`, `cargo fmt --check`; fix findings
 
 Threat matrix: all rows N/A — no RED tests.

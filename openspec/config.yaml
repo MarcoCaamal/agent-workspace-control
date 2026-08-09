@@ -9,25 +9,25 @@ execution:
 strict_tdd: false
 
 context: |
-  Lifecycle: foundation; no application source or Cargo manifest exists yet.
-  Intended stack: Rust, not yet initialized in the project.
-  Architecture: not established.
-  Testing: no project test runner, test layers, or coverage configuration detected.
+  Lifecycle: foundation — Rust workspace bootstrapped; core use cases and CLI implemented.
+  Stack: Rust workspace (resolver 3, edition 2024): awc-core library (domain/error/infrastructure layers; rusqlite 0.32 bundled, serde 1, toml 0.8) and awctl binary (clap 4, serde_json 1).
+  Architecture: layered — domain contracts, infrastructure (TOML config, path discovery, SQLite migrations), application use cases, thin CLI boundary.
+  Testing: cargo test runs the workspace (unit + integration suites); clippy and rustfmt are configured at workspace level.
   Toolchain: rustc 1.92.0, cargo 1.92.0, rustfmt 1.8.0, clippy 0.1.92 installed on the host.
-  Repository: the directory is not a Git work tree.
+  Repository: Git work tree on the feature-branch-chain child branch `feature/awc-foundation-07-hygiene`.
 
 testing:
-  detected: 2026-08-08
+  detected: 2026-08-09
   strict_tdd: false
-  strict_tdd_reason: No project test runner is configured because Cargo.toml and source targets are absent.
-  manifest: null
+  strict_tdd_reason: Project convention is behavior-first RED-GREEN per work unit; strict_tdd remains false.
+  manifest: Cargo.toml (workspace members: crates/awc-core, crates/awctl)
   runner:
-    available: false
-    framework: null
-    command: null
+    available: true
+    framework: cargo test
+    command: cargo test --workspace
   layers:
-    unit: { available: false, tool: null }
-    integration: { available: false, tool: null }
+    unit: { available: true, tool: cargo test -p awc-core }
+    integration: { available: true, tool: cargo test -p awctl (crates/awctl/tests/cli.rs via CARGO_BIN_EXE_awctl) }
     e2e: { available: false, tool: null }
   coverage:
     available: false
@@ -35,19 +35,19 @@ testing:
   quality:
     linter:
       installed: true
-      configured: false
+      configured: true
       tool: clippy 0.1.92
-      command: null
+      command: cargo clippy --workspace -- -D warnings
     type_checker:
       installed: true
-      configured: false
+      configured: true
       tool: rustc 1.92.0
-      command: null
+      command: cargo check --workspace
     formatter:
       installed: true
-      configured: false
+      configured: true
       tool: rustfmt 1.8.0
-      command: null
+      command: cargo fmt --check
 
 rules:
   proposal:
@@ -63,13 +63,14 @@ rules:
     - Keep tests and documentation in the same reviewable work unit as their implementation.
   apply:
     tdd: false
-    test_command: ""
+    test_command: cargo test --workspace
     guidelines:
-      - Do not claim project commands until the Rust workspace and scripts exist.
-      - Re-detect testing capabilities after the Cargo workspace is initialized.
+      - Workspace exists; cargo commands are authoritative (test/clippy/fmt/check).
+      - No coverage configuration exists — do not invent coverage commands.
+      - No configured E2E layer — CLI smoke tests are manual harnesses, not a claimed layer.
   verify:
-    test_command: ""
-    build_command: ""
+    test_command: cargo test --workspace
+    build_command: cargo check --workspace
     coverage_threshold: 0
   archive:
     - Warn before merging destructive deltas.

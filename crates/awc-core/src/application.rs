@@ -3,11 +3,9 @@
 use std::fs;
 use std::path::Path;
 
-use crate::domain::{
-    CONFIG_SCHEMA_VERSION, CheckResult, CommandResult, InitStatus, QuickDoctor, Status,
-};
+use crate::domain::{CheckResult, CommandResult, InitStatus, QuickDoctor, Status};
 use crate::error::AwcError;
-use crate::infrastructure::config::{self, CONFIG_FILE_NAME};
+use crate::infrastructure::config;
 use crate::infrastructure::paths::{self, WORKSPACE_DIR_NAME};
 use crate::infrastructure::sqlite;
 
@@ -138,6 +136,8 @@ pub fn doctor_quick(start: &Path) -> Result<CommandResult, AwcError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::CONFIG_SCHEMA_VERSION;
+    use crate::infrastructure::config::CONFIG_FILE_NAME;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("awc-core-app-{}-{name}", std::process::id()));

@@ -59,9 +59,9 @@ Chain strategy: pending
 
 ## Phase 5: CLI Contracts
 
-- [ ] 5.1 RED: CLI tests — exits 0/1/2/3; JSON envelope (`schemaVersion`+`ok`, exactly `data` or `error`); errors on stderr
-- [ ] 5.2 Implement `main.rs`: clap (init, status, doctor --quick, --json), human/JSON renderers
-- [ ] 5.3 Emit one newline-terminated JSON doc; clap errors → Usage, exit 2
+- [x] 5.1 RED: CLI tests — exits 0/1/2/3; JSON envelope (`schemaVersion`+`ok`, exactly `data` or `error`); errors on stderr
+- [x] 5.2 Implement `main.rs`: clap (init, status, doctor --quick, --json), human/JSON renderers
+- [x] 5.3 Emit one newline-terminated JSON doc; clap errors → Usage, exit 2
 
 ## Phase 6: Delivery Hygiene
 

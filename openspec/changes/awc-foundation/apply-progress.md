@@ -325,3 +325,44 @@ Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
 - `status` maps DB errors to `database_ok`/`schema_ok` booleans (design); `doctor_quick` carries detail strings. Missing/invalid config: hard `status` error, failed `doctor` check.
 - Empty-dir cleanup branch (pre-config failure) verified by inspection — deterministic trigger needs privilege games; "never remove pre-existing state" IS behavior-tested (`init_rejects_invalid_config_and_keeps_existing_state`).
 - Escaping-symlink tests `#[cfg(all(test, unix))]` (Linux Tier 1). None blocking.
+# Apply Progress: AWC Foundation — Slice 6 (PR 6)
+
+- **Work unit**: `slice-6-awctl-cli` (attempt ordinal 6); date 2026-08-09; Standard mode (strict_tdd: false), behavior-first RED → GREEN; feature-branch-chain, child branch `feature/awc-foundation-06-cli`
+
+## Tasks Completed (5.1–5.3)
+- [x] 5.1 RED CLI tests — exits 0/1/2/3; JSON envelope (`schemaVersion`+`ok`, exactly `data` xor `error`); errors on stderr; one newline-terminated doc
+- [x] 5.2 `main.rs`: clap (init, status, doctor --quick required, global --json), human/typed-JSON renderers; dispatch to awc-core only
+- [x] 5.3 One newline-terminated JSON doc; clap usage errors → stderr exit 2; core `exit_code()` mapping preserved (3 ws-not-found, 1 operational)
+
+## Files Changed
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `crates/awctl/tests/cli.rs` | Created | 6 RED-first contract tests via `CARGO_BIN_EXE_awctl`: envelope both polarities, exits 0/1/2/3, exactly-one-newline stdout, stderr discipline, `.awc` non-creation on ws-not-found, deterministic check order |
+| `crates/awctl/src/main.rs` | Replaced stub | Synchronous clap boundary; `parts`/`ws`/`check_view` mappers; typed camelCase views (`WorkspaceView`, `CheckView`, `DataView`, `ErrorView`, `JsonDoc`); `error_code` per variant; human renderers; `render_error` (JSON doc stdout, human stderr) |
+| `crates/awctl/Cargo.toml`, `Cargo.lock` | Modified / Generated | `serde` derive dep; `serde_json` dev-dep; Cargo.lock +1 (awctl gains `serde`, no new packages; generated, excluded from authored count) |
+| `tasks.md`, `apply-progress.md` | Modified | Checkboxes 5.1–5.3 `[x]`; Slice 6 section appended (slices 1–6 cumulative) |
+
+## Work Unit Evidence
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | RED: `cargo test -p awctl` → `FAILED. 0 passed; 6 failed` (stub fails all contract tests). GREEN: `cargo test -p awctl` → `ok. 6 passed; 0 failed` |
+| Runtime harness command/scenario and exact result | Smoke: temp dir — `init --json` exit 0 single JSON doc stderr empty; `status --json`/`doctor --quick --json` from nested dir exit 0, checks ordered path/config/database/schema, `message` omitted when ok; `status` human outside workspace exit 3 stdout empty stderr `awctl: no AWC workspace…`; `status --json` exit 3 error envelope and `.awc` never created; `bogus`/`doctor`/`status --nope` exit 2 usage on stderr; invalid config → exit 1 `invalid_config` |
+| Rollback boundary | Delete `crates/awctl/tests/`; revert `main.rs` to 9-line stub, `Cargo.toml` deps, Cargo.lock line, tasks.md checkboxes, Slice 6 progress section. awc-core untouched |
+
+Threat matrix: all rows N/A (design) — no threat-matrix RED tests.
+
+## Changed-Line Estimate
+- Authored: **~395** (main.rs 198, tests/cli.rs 146, Cargo.toml 4, tasks.md 6, apply-progress ≈41); Cargo.lock +1 generated, excluded. Budget: 400 hard → **OK** (5-line margin); target ≤330 not met (~65 over) — precedent slices 2 (~390) and 5 (398); scope fully delivered, nothing dropped
+
+## Commands Run with Outcomes
+| Command | Outcome |
+|---------|---------|
+| `cargo test -p awctl` (RED, stub) | Exit 1; `0 passed; 6 failed` |
+| `cargo test -p awctl` (GREEN) | Exit 0; `ok. 6 passed; 0 failed` |
+| `cargo test --workspace` | Exit 0; 35 passed (29 core + 6 CLI) |
+| `cargo fmt` / `cargo fmt --check` | Clean (exit 0) |
+
+## Remaining Work / Risks
+- Tasks 6.1–6.2 pending (2). Next: Unit 7 — testing refresh + hygiene (PR 7). No commit/push/PR performed (lifecycle actions require parent receipt validation).
+- Pre-existing awc-core unused-import warnings (`CONFIG_SCHEMA_VERSION`, `CONFIG_FILE_NAME` in application.rs, used only in tests) — clippy `-D warnings` (task 6.2) must address; NOT touched in this slice (out of scope).
+- Doctor JSON `message` passes core's detail string verbatim (may embed the state DB path) — core-authored, matches doctor's detail-string design; awctl renders as-is. `awctl doctor` without `--quick` is a clap usage error exit 2 (contract-compatible).

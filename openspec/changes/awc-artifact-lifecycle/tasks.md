@@ -33,11 +33,11 @@ Chain strategy pending: orchestrator/user decision required before apply.
 
 ## Phase 2: Persistence/Filesystem Compensation
 
-- [ ] 2.1 RED: repo CRUD + audit coupling (temp-workspace SQLite)
-- [ ] 2.2 GREEN: artifact repo + audit ops in `sqlite.rs`
-- [ ] 2.3 Create `infrastructure/artifacts.rs`: injectable `ArtifactFs` (temp-create, rename, trash-move, move-back)
-- [ ] 2.4 RED: compensation: fs failure leaves DB unchanged, temp cleaned, `CompensationFailed`
-- [ ] 2.5 Add file fingerprint helper in `hash.rs` (size+sha256; shared empty fingerprint)
+- [x] 2.1 RED: repo CRUD + audit coupling (temp-workspace SQLite)
+- [x] 2.2 GREEN: artifact repo + audit ops in `sqlite.rs`
+- [x] 2.3 Create `infrastructure/artifacts.rs`: injectable `ArtifactFs` (temp-create, rename, trash-move, move-back)
+- [x] 2.4 RED: compensation: fs failure leaves DB unchanged, temp cleaned, `CompensationFailed`
+- [x] 2.5 Add file fingerprint helper in `hash.rs` (size+sha256; shared empty fingerprint)
 
 ## Phase 3: Application Use Cases
 

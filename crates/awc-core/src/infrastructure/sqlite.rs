@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OpenFlags};
 use uuid::Uuid;
 
-use crate::domain::{Project, ProjectId};
+use crate::domain::{Artifact, ArtifactId, ArtifactStatus, AuditEventId, Project, ProjectId};
 use crate::error::AwcError;
 
 /// Ledger table recording every applied migration version.
@@ -115,6 +115,8 @@ pub fn open_readwrite(path: &Path) -> Result<Connection, AwcError> {
 
 const PROJECT_COLUMNS: &str = "id, slug, name, root_path, status";
 
+const ARTIFACT_COLUMNS: &str = "id, project_id, artifact_type, title, path, original_path, status, sha256, size, last_seen_at, created_at, updated_at";
+
 /// Parses the canonical hyphenated text form stored by v2 (rusqlite's
 /// `uuid` feature reads raw 16-byte blobs, which v2 does not use).
 fn parse_uuid(text: String) -> rusqlite::Result<Uuid> {
@@ -132,6 +134,32 @@ fn row_to_project(row: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
         name: row.get(2)?,
         root_path: root_path.map(PathBuf::from),
         status: row.get(4)?,
+    })
+}
+
+/// Maps one artifacts row to a typed artifact.
+fn row_to_artifact(row: &rusqlite::Row<'_>) -> rusqlite::Result<Artifact> {
+    let status_text: String = row.get(6)?;
+    let status = ArtifactStatus::parse(&status_text).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            6,
+            rusqlite::types::Type::Text,
+            format!("unknown artifact status: {status_text}").into(),
+        )
+    })?;
+    Ok(Artifact {
+        id: ArtifactId(parse_uuid(row.get(0)?)?),
+        project_id: ProjectId(parse_uuid(row.get(1)?)?),
+        artifact_type: row.get(2)?,
+        title: row.get(3)?,
+        path: row.get::<_, Option<String>>(4)?.map(PathBuf::from),
+        original_path: row.get::<_, Option<String>>(5)?.map(PathBuf::from),
+        status,
+        sha256: row.get(7)?,
+        size: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        last_seen_at: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
     })
 }
 
@@ -287,6 +315,217 @@ fn migrate_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), AwcError> {
         ));
     }
     Ok(())
+}
+
+/// Inserts an artifact with audit event in one transaction. A slug
+/// collision on path or duplicate non-empty fingerprint fails before insert.
+pub fn insert_artifact(conn: &mut Connection, artifact: &Artifact) -> Result<(), AwcError> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO artifacts (id, project_id, artifact_type, title, path, original_path, \
+         status, sha256, size, last_seen_at, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            artifact.id.0.to_string(),
+            artifact.project_id.0.to_string(),
+            artifact.artifact_type,
+            artifact.title,
+            artifact
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact
+                .original_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact.status.as_str(),
+            artifact.sha256,
+            artifact.size.map(|s| s as i64),
+            artifact.last_seen_at,
+            artifact.created_at,
+            artifact.updated_at,
+        ],
+    )?;
+    insert_audit_event_tx(
+        &tx,
+        artifact.project_id,
+        Some(artifact.id),
+        "artifact.created",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Updates an artifact's mutable fields and writes an audit event in one
+/// transaction.
+pub fn update_artifact(
+    conn: &mut Connection,
+    artifact: &Artifact,
+    event_type: &str,
+) -> Result<(), AwcError> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE artifacts SET path = ?2, original_path = ?3, status = ?4, \
+         sha256 = ?5, size = ?6, last_seen_at = ?7, updated_at = ?8 WHERE id = ?1",
+        rusqlite::params![
+            artifact.id.0.to_string(),
+            artifact
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact
+                .original_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact.status.as_str(),
+            artifact.sha256,
+            artifact.size.map(|s| s as i64),
+            artifact.last_seen_at,
+            artifact.updated_at,
+        ],
+    )?;
+    insert_audit_event_tx(&tx, artifact.project_id, Some(artifact.id), event_type)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Fetches one artifact by exact ID.
+pub fn get_artifact(conn: &Connection, id: ArtifactId) -> Result<Artifact, AwcError> {
+    conn.query_row(
+        &format!("SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE id = ?1"),
+        [id.0.to_string()],
+        row_to_artifact,
+    )
+    .map_err(|err| match err {
+        rusqlite::Error::QueryReturnedNoRows => AwcError::ArtifactNotFound,
+        other => AwcError::Database(other),
+    })
+}
+
+/// Candidate artifacts whose id starts with `prefix`.
+pub fn select_artifacts_by_id_prefix(
+    conn: &Connection,
+    prefix: &str,
+) -> Result<Vec<Artifact>, AwcError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE id LIKE ?1 || '%' ORDER BY id"
+    ))?;
+    let mut rows = stmt.query([prefix])?;
+    let mut artifacts = Vec::new();
+    while let Some(row) = rows.next()? {
+        artifacts.push(row_to_artifact(row)?);
+    }
+    Ok(artifacts)
+}
+
+/// Lists artifacts with optional filters, ordered by created_at DESC, id DESC.
+pub fn list_artifacts(
+    conn: &Connection,
+    project_id: Option<ProjectId>,
+    artifact_type: Option<&str>,
+    status: Option<ArtifactStatus>,
+) -> Result<Vec<Artifact>, AwcError> {
+    let mut sql = format!("SELECT {ARTIFACT_COLUMNS} FROM artifacts WHERE 1=1");
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+    if let Some(pid) = project_id {
+        sql.push_str(&format!(" AND project_id = ?{idx}"));
+        params.push(Box::new(pid.0.to_string()));
+        idx += 1;
+    }
+    if let Some(t) = artifact_type {
+        sql.push_str(&format!(" AND artifact_type = ?{idx}"));
+        params.push(Box::new(t.to_string()));
+        idx += 1;
+    }
+    if let Some(s) = status {
+        sql.push_str(&format!(" AND status = ?{idx}"));
+        params.push(Box::new(s.as_str().to_string()));
+    }
+    sql.push_str(" ORDER BY created_at DESC, id DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut rows = stmt.query(refs.as_slice())?;
+    let mut artifacts = Vec::new();
+    while let Some(row) = rows.next()? {
+        artifacts.push(row_to_artifact(row)?);
+    }
+    Ok(artifacts)
+}
+
+/// Checks whether a non-null path is already registered to a different artifact.
+pub fn path_is_owned(
+    conn: &Connection,
+    path: &str,
+    exclude_id: Option<ArtifactId>,
+) -> Result<bool, AwcError> {
+    let sql = if exclude_id.is_some() {
+        "SELECT COUNT(*) FROM artifacts WHERE path = ?1 AND id != ?2"
+    } else {
+        "SELECT COUNT(*) FROM artifacts WHERE path = ?1"
+    };
+    let count: i64 = match exclude_id {
+        Some(id) => conn.query_row(sql, rusqlite::params![path, id.0.to_string()], |row| {
+            row.get(0)
+        })?,
+        None => conn.query_row(sql, [path], |row| row.get(0))?,
+    };
+    Ok(count > 0)
+}
+
+/// Checks whether a non-empty fingerprint already belongs to a different artifact.
+pub fn fingerprint_is_duplicate(
+    conn: &Connection,
+    sha256: &str,
+    size: u64,
+    exclude_id: Option<ArtifactId>,
+) -> Result<bool, AwcError> {
+    if size == 0 {
+        return Ok(false);
+    }
+    let sql = if exclude_id.is_some() {
+        "SELECT COUNT(*) FROM artifacts WHERE sha256 = ?1 AND size > 0 AND id != ?2"
+    } else {
+        "SELECT COUNT(*) FROM artifacts WHERE sha256 = ?1 AND size > 0"
+    };
+    let count: i64 = match exclude_id {
+        Some(id) => conn.query_row(sql, rusqlite::params![sha256, id.0.to_string()], |row| {
+            row.get(0)
+        })?,
+        None => conn.query_row(sql, [sha256], |row| row.get(0))?,
+    };
+    Ok(count > 0)
+}
+
+/// Inserts an audit event inside an existing transaction.
+fn insert_audit_event_tx(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: ProjectId,
+    artifact_id: Option<ArtifactId>,
+    event_type: &str,
+) -> Result<(), AwcError> {
+    tx.execute(
+        "INSERT INTO audit_events (id, project_id, artifact_id, event_type) \
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![
+            AuditEventId::new().0.to_string(),
+            project_id.0.to_string(),
+            artifact_id.map(|a| a.0.to_string()),
+            event_type,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Counts audit events for one artifact, used by tests to verify coupling.
+#[cfg(test)]
+pub fn count_audit_events(conn: &Connection, artifact_id: ArtifactId) -> Result<i64, AwcError> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM audit_events WHERE artifact_id = ?1",
+        [artifact_id.0.to_string()],
+        |row| row.get(0),
+    )?;
+    Ok(count)
 }
 
 /// Schema health: all expected tables exist and every migration version is
@@ -793,6 +1032,213 @@ mod tests {
             !columns(&conn, "projects").contains("slug"),
             "no v2 DDL may run"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    fn make_artifact(id: &str, project_id: ProjectId, path: Option<&str>) -> Artifact {
+        Artifact {
+            id: ArtifactId(Uuid::parse_str(id).unwrap()),
+            project_id,
+            artifact_type: "doc".into(),
+            title: "test".into(),
+            path: path.map(PathBuf::from),
+            original_path: path.map(PathBuf::from),
+            status: ArtifactStatus::Active,
+            sha256: None,
+            size: None,
+            last_seen_at: "2026-01-01T00:00:00Z".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn insert_artifact_writes_row_and_audit() {
+        let dir = temp_dir("crud-insert");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let artifact = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        insert_artifact(&mut conn, &artifact).expect("insert artifact");
+        let loaded = get_artifact(&conn, artifact.id).expect("get artifact");
+        assert_eq!(loaded.title, "test");
+        assert_eq!(loaded.status, ArtifactStatus::Active);
+        assert_eq!(count_audit_events(&conn, artifact.id).expect("count"), 1);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_artifact_rejects_duplicate_path() {
+        let dir = temp_dir("crud-dup-path");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let first = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        insert_artifact(&mut conn, &first).expect("insert first");
+        let second = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        let err = insert_artifact(&mut conn, &second).expect_err("duplicate path");
+        assert!(err.to_string().contains("UNIQUE"), "{err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_artifact_rejects_duplicate_non_empty_fingerprint() {
+        let dir = temp_dir("crud-dup-hash");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let mut first = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        first.sha256 = Some("abc".into());
+        first.size = Some(5);
+        insert_artifact(&mut conn, &first).expect("insert first");
+        let mut second = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            project.id,
+            Some("artifacts/b.txt"),
+        );
+        second.sha256 = Some("abc".into());
+        second.size = Some(5);
+        let err = insert_artifact(&mut conn, &second).expect_err("duplicate fingerprint");
+        assert!(err.to_string().contains("UNIQUE"), "{err}");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn insert_artifact_allows_shared_empty_fingerprint() {
+        let dir = temp_dir("crud-empty-hash");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let mut first = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        first.sha256 = Some("empty".into());
+        first.size = Some(0);
+        insert_artifact(&mut conn, &first).expect("insert first");
+        let mut second = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            project.id,
+            Some("artifacts/b.txt"),
+        );
+        second.sha256 = Some("empty".into());
+        second.size = Some(0);
+        insert_artifact(&mut conn, &second).expect("insert second with same empty fingerprint");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn update_artifact_changes_status_and_audits() {
+        let dir = temp_dir("crud-update");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let artifact = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        insert_artifact(&mut conn, &artifact).expect("insert");
+        let mut updated = artifact.clone();
+        updated.status = ArtifactStatus::Archived;
+        updated.updated_at = "2026-01-02T00:00:00Z".into();
+        update_artifact(&mut conn, &updated, "artifact.archived").expect("update");
+        let loaded = get_artifact(&conn, artifact.id).expect("get");
+        assert_eq!(loaded.status, ArtifactStatus::Archived);
+        assert_eq!(count_audit_events(&conn, artifact.id).expect("count"), 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_artifacts_filters_and_orders() {
+        let dir = temp_dir("crud-list");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let mut a = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        a.created_at = "2026-01-01T00:00:00Z".into();
+        a.status = ArtifactStatus::Active;
+        a.artifact_type = "doc".into();
+        insert_artifact(&mut conn, &a).expect("insert a");
+        let mut b = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            project.id,
+            Some("artifacts/b.txt"),
+        );
+        b.created_at = "2026-01-02T00:00:00Z".into();
+        b.status = ArtifactStatus::Archived;
+        b.artifact_type = "report".into();
+        insert_artifact(&mut conn, &b).expect("insert b");
+        let all = list_artifacts(&conn, None, None, None).expect("list all");
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id, b.id, "newest first");
+        let filtered = list_artifacts(&conn, None, Some("doc"), None).expect("filter type");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, a.id);
+        let filtered = list_artifacts(&conn, None, None, Some(ArtifactStatus::Archived))
+            .expect("filter status");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, b.id);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn path_and_fingerprint_ownership_checks() {
+        let dir = temp_dir("crud-ownership");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let mut artifact = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        artifact.sha256 = Some("abc".into());
+        artifact.size = Some(5);
+        insert_artifact(&mut conn, &artifact).expect("insert");
+        assert!(path_is_owned(&conn, "artifacts/a.txt", None).expect("path owned"));
+        assert!(!path_is_owned(&conn, "artifacts/b.txt", None).expect("path free"));
+        assert!(!path_is_owned(&conn, "artifacts/a.txt", Some(artifact.id)).expect("exclude self"));
+        assert!(fingerprint_is_duplicate(&conn, "abc", 5, None).expect("fingerprint dup"));
+        assert!(
+            !fingerprint_is_duplicate(&conn, "abc", 0, None).expect("empty fingerprint exempt")
+        );
+        assert!(
+            !fingerprint_is_duplicate(&conn, "abc", 5, Some(artifact.id)).expect("exclude self")
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn select_artifacts_by_prefix() {
+        let dir = temp_dir("crud-prefix");
+        let mut conn = migrate_at(&dir);
+        let project = insert_project(&mut conn, "demo", "Demo", None).expect("insert project");
+        let artifact = make_artifact(
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            project.id,
+            Some("artifacts/a.txt"),
+        );
+        insert_artifact(&mut conn, &artifact).expect("insert");
+        let found = select_artifacts_by_id_prefix(&conn, "aaaaaaaa").expect("prefix");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, artifact.id);
+        let none = select_artifacts_by_id_prefix(&conn, "bbbbbbbb").expect("no match");
+        assert!(none.is_empty());
         fs::remove_dir_all(&dir).ok();
     }
 }

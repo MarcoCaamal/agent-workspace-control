@@ -363,9 +363,10 @@ pub fn trash_artifact(start: &Path, id_or_prefix: &str) -> Result<CommandResult,
     Ok(CommandResult::ArtifactShown(updated))
 }
 
-/// Restores a trashed artifact: returns the file to its unoccupied original
-/// path, then updates metadata/status/audit. A DB failure after the move
-/// moves the file back to trash.
+/// Restores an artifact to active: a trashed artifact's file is moved back
+/// to its unoccupied original path, while an archived artifact needs no file
+/// move (archive is status-only). A DB failure after a move moves the file
+/// back to trash.
 pub fn restore_artifact(start: &Path, id_or_prefix: &str) -> Result<CommandResult, AwcError> {
     let (_, state_dir) = paths::discover_with_root(start)?;
     let config = config::load_readonly(&state_dir)?;
@@ -377,6 +378,16 @@ pub fn restore_artifact(start: &Path, id_or_prefix: &str) -> Result<CommandResul
             "artifact has no original path".into(),
         ));
     };
+
+    // Archived artifacts never moved: only the status changes.
+    if artifact.status == ArtifactStatus::Archived {
+        let mut updated = artifact.clone();
+        updated.status = ArtifactStatus::Active;
+        updated.updated_at = chrono_now();
+        sqlite::update_artifact(&mut conn, &updated, "artifact.restored")?;
+        return Ok(CommandResult::ArtifactShown(updated));
+    }
+
     if sqlite::path_is_owned(&conn, &original.to_string_lossy(), Some(artifact.id))? {
         return Err(AwcError::RestoreConflict(
             "original path is occupied".into(),

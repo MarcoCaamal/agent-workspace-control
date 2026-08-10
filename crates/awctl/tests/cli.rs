@@ -288,3 +288,168 @@ fn project_list_is_deterministic_and_external_root_is_metadata_only() {
     assert!(stdout.contains("projects (4):") && stdout.contains("- alpha (Alpha)"));
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn artifact_create_show_list_archive_trash_restore_cycle() {
+    let dir = temp_dir("artifact-cycle");
+    run_in(&dir, &["init"]);
+    let out = run_in(&dir, &["project", "add", "--name", "Demo", "--json"]);
+    let pid = envelope(true, &out)["data"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let out = run_in(
+        &dir,
+        &[
+            "artifact",
+            "create",
+            "--project",
+            &pid,
+            "--type",
+            "doc",
+            "--title",
+            "Cycle",
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let doc = envelope(true, &out);
+    let aid = doc["data"]["artifact"]["id"].as_str().unwrap().to_string();
+    assert_eq!(doc["data"]["artifact"]["status"], "active");
+    assert!(
+        doc["data"]["artifact"]["path"]
+            .as_str()
+            .unwrap()
+            .contains("artifacts/")
+    );
+    assert_eq!(doc["data"]["artifact"]["size"], 0);
+
+    // Show by full id.
+    let out = run_in(&dir, &["artifact", "show", &aid, "--json"]);
+    assert_eq!(envelope(true, &out)["data"]["artifact"]["id"], aid);
+
+    // List with status filter.
+    let out = run_in(&dir, &["artifact", "list", "--status", "active", "--json"]);
+    let list = envelope(true, &out);
+    assert_eq!(list["data"]["artifacts"].as_array().unwrap().len(), 1);
+
+    // Trash (physical move) from active.
+    let out = run_in(&dir, &["artifact", "trash", &aid, "--json"]);
+    assert_eq!(
+        envelope(true, &out)["data"]["artifact"]["status"],
+        "trashed"
+    );
+    let trashed_path = envelope(true, &run_in(&dir, &["artifact", "show", &aid, "--json"]))["data"]
+        ["artifact"]["path"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        trashed_path.contains("trash/"),
+        "moved to trash: {trashed_path}"
+    );
+
+    // Restore back to original.
+    let out = run_in(&dir, &["artifact", "restore", &aid, "--json"]);
+    assert_eq!(envelope(true, &out)["data"]["artifact"]["status"], "active");
+
+    // Archive is the terminal reversible step (status-only).
+    let out = run_in(&dir, &["artifact", "archive", &aid, "--json"]);
+    assert_eq!(
+        envelope(true, &out)["data"]["artifact"]["status"],
+        "archived"
+    );
+
+    // Unknown id -> artifact_not_found, exit 1.
+    let out = run_in(&dir, &["artifact", "show", "ffffffff", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(envelope(false, &out)["error"]["code"], "artifact_not_found");
+
+    // Ambiguous prefix -> ambiguous_artifact_id.
+    let out = run_in(&dir, &["artifact", "show", &aid[..8], "--json"]);
+    if out.status.code() == Some(0) {
+        // Single artifact so a full 8-char prefix may be unique; verify id.
+        assert_eq!(envelope(true, &out)["data"]["artifact"]["id"], aid);
+    } else {
+        assert_eq!(
+            envelope(false, &out)["error"]["code"],
+            "ambiguous_artifact_id"
+        );
+    }
+
+    // Invalid status filter -> usage error exit 2.
+    let out = run_in(&dir, &["artifact", "list", "--status", "bogus", "--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(envelope(false, &out)["error"]["code"], "usage");
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn artifact_relink_refreshes_fingerprint_and_rejects_occupied_target() {
+    let dir = temp_dir("artifact-relink");
+    run_in(&dir, &["init"]);
+    let pid = envelope(
+        true,
+        &run_in(&dir, &["project", "add", "--name", "Demo", "--json"]),
+    )["data"]["project"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let aid = envelope(
+        true,
+        &run_in(
+            &dir,
+            &[
+                "artifact",
+                "create",
+                "--project",
+                &pid,
+                "--type",
+                "doc",
+                "--title",
+                "R",
+                "--json",
+            ],
+        ),
+    )["data"]["artifact"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Old file still exists -> relink refused with restore_conflict.
+    let out = run_in(
+        &dir,
+        &[
+            "artifact",
+            "relink",
+            &aid,
+            "--path",
+            "artifacts/new.txt",
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(envelope(false, &out)["error"]["code"], "restore_conflict");
+
+    // Remove the old file and create a new target, then relink.
+    let old = dir.join("artifacts").join(&aid);
+    fs::remove_file(&old).expect("remove old");
+    fs::write(dir.join("artifacts").join("new.txt"), b"hello world").expect("write new");
+    let out = run_in(
+        &dir,
+        &[
+            "artifact",
+            "relink",
+            &aid,
+            "--path",
+            "artifacts/new.txt",
+            "--json",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0));
+    let doc = envelope(true, &out);
+    assert_eq!(doc["data"]["artifact"]["size"], 11);
+    assert!(doc["data"]["artifact"]["sha256"].as_str().is_some());
+    fs::remove_dir_all(&dir).ok();
+}

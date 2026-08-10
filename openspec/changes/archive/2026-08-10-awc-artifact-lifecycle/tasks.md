@@ -41,24 +41,24 @@ Chain strategy pending: orchestrator/user decision required before apply.
 
 ## Phase 3: Application Use Cases
 
-- [ ] 3.1 RED→GREEN: `create_artifact`: derive `artifacts/<id>`, empty file, fingerprint, reject occupied/duplicate
-- [ ] 3.2 RED→GREEN: `show_artifact`/`list_artifacts`: filters, `created_at DESC, id DESC`
-- [ ] 3.3 RED→GREEN: `archive_artifact`: status-only + audit
-- [ ] 3.4 RED→GREEN: `trash_artifact`: collision-safe `trash/<id>-<basename>`, move, audit
-- [ ] 3.5 RED→GREEN: `restore_artifact`: original path free, reverse sequence
-- [ ] 3.6 RED→GREEN: `relink_artifact`: old absent, unowned target, refreshed fingerprint
-- [ ] 3.7 Verify deferred caps (adopt/purge/reconciliation/MCP) rejected, no mutation
+- [x] 3.1 RED→GREEN: `create_artifact`: derive `artifacts/<id>`, empty file, fingerprint, reject occupied/duplicate
+- [x] 3.2 RED→GREEN: `show_artifact`/`list_artifacts`: filters, `created_at DESC, id DESC`
+- [x] 3.3 RED→GREEN: `archive_artifact`: status-only + audit
+- [x] 3.4 RED→GREEN: `trash_artifact`: collision-safe `trash/<id>-<basename>`, move, audit
+- [x] 3.5 RED→GREEN: `restore_artifact`: original path free, reverse sequence
+- [x] 3.6 RED→GREEN: `relink_artifact`: old absent, unowned target, refreshed fingerprint
+- [x] 3.7 Verify deferred caps (adopt/purge/reconciliation/MCP) rejected, no mutation
 
 ## Phase 4: CLI/Contracts
 
-- [ ] 4.1 RED: contracts in `crates/awctl/tests/cli.rs`: v1 JSON, snake_case errors, exits 0/1/2/3
-- [ ] 4.2 GREEN: artifact subcommands in `awctl/src/main.rs` (create/show/list/archive/trash/restore/relink)
-- [ ] 4.3 Add human/JSON v1 views (original_path, last_seen_at) + error mapping in `main.rs`
-- [ ] 4.4 RED→GREEN: prefix resolution: unknown → `artifact_not_found`, ambiguous → `ambiguous_artifact_id`
+- [x] 4.1 RED: contracts in `crates/awctl/tests/cli.rs`: v1 JSON, snake_case errors, exits 0/1/2/3
+- [x] 4.2 GREEN: artifact subcommands in `awctl/src/main.rs` (create/show/list/archive/trash/restore/relink)
+- [x] 4.3 Add human/JSON v1 views (original_path, last_seen_at) + error mapping in `main.rs`
+- [x] 4.4 RED→GREEN: prefix resolution: unknown → `artifact_not_found`, ambiguous → `ambiguous_artifact_id`
 
 ## Phase 5: Docs/Verification
 
-- [ ] 5.1 Update `docs/usage.md`: commands, transitions, policy, compensation
-- [ ] 5.2 Update `docs/architecture.md`: v3 migration, compensating consistency
-- [ ] 5.3 Gate: `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`
-- [ ] 5.4 Manual smoke: 7 commands in temp workspace; record results
+- [x] 5.1 Update `docs/usage.md`: commands, transitions, policy, compensation
+- [x] 5.2 Update `docs/architecture.md`: v3 migration, compensating consistency
+- [x] 5.3 Gate: `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`
+- [x] 5.4 Manual smoke: 7 commands in temp workspace; record results

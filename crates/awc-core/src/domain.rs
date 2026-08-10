@@ -73,6 +73,83 @@ impl Default for AuditEventId {
     }
 }
 
+/// Lifecycle state of a governed artifact (design: Lifecycle model).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArtifactStatus {
+    Active,
+    Archived,
+    Trashed,
+}
+
+impl ArtifactStatus {
+    /// Canonical lower-case text form (storage and views).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Archived => "archived",
+            Self::Trashed => "trashed",
+        }
+    }
+
+    /// Parses the canonical text form; legacy names (`tracked`,
+    /// `completed`) are rejected.
+    pub fn parse(text: &str) -> Option<ArtifactStatus> {
+        match text {
+            "active" => Some(Self::Active),
+            "archived" => Some(Self::Archived),
+            "trashed" => Some(Self::Trashed),
+            _ => None,
+        }
+    }
+}
+
+/// Approves lifecycle edges: `active→archived`, `active→trashed`,
+/// `archived→active`, `trashed→active`; everything else fails with
+/// [`AwcError::ArtifactStatusConflict`].
+pub fn can_transition(from: ArtifactStatus, to: ArtifactStatus) -> Result<(), AwcError> {
+    if matches!(
+        (from, to),
+        (ArtifactStatus::Active, ArtifactStatus::Archived)
+            | (ArtifactStatus::Active, ArtifactStatus::Trashed)
+            | (ArtifactStatus::Archived, ArtifactStatus::Active)
+            | (ArtifactStatus::Trashed, ArtifactStatus::Active)
+    ) {
+        Ok(())
+    } else {
+        Err(AwcError::ArtifactStatusConflict(from, to))
+    }
+}
+
+/// Ownership class of a workspace-relative path (design: Path policy),
+/// fixed in Rust by first component (see `paths::classify_path`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathOwnership {
+    AwcManaged,
+    AgentRuntimeManaged,
+    UserManaged,
+    Ignored,
+    Unmanaged,
+}
+
+/// A governed artifact (design: Lifecycle model). `path` is the current
+/// location; `original_path` is the creation location used as the restore
+/// target (v3 backfills it from `path`); both optional for legacy rows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artifact {
+    pub id: ArtifactId,
+    pub project_id: ProjectId,
+    pub artifact_type: String,
+    pub title: String,
+    pub path: Option<PathBuf>,
+    pub original_path: Option<PathBuf>,
+    pub status: ArtifactStatus,
+    pub sha256: Option<String>,
+    pub size: Option<u64>,
+    pub last_seen_at: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Deterministic SHA-256 plus exact byte count over a reader, the future
 /// reconciliation primitive for artifacts (design: hash.rs).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,22 +250,48 @@ pub fn validate_slug(slug: &str) -> Result<(), AwcError> {
     Ok(())
 }
 
-/// Resolves an ID prefix deterministically against the canonical hyphenated
-/// text form: exactly one match selects it, zero matches report not found,
-/// and two or more report ambiguity (design: Identity and lookup). This is
-/// the pure rule; the persistence layer supplies the candidate rows.
-pub fn resolve_id_prefix(prefix: &str, ids: &[Uuid]) -> Result<Uuid, AwcError> {
+/// Shared exact-one prefix rule: zero matches report `not_found`, two or
+/// more report `ambiguous` (design: Identity and lookup).
+fn resolve_prefix(
+    prefix: &str,
+    ids: &[Uuid],
+    not_found: AwcError,
+    ambiguous: AwcError,
+) -> Result<Uuid, AwcError> {
     let mut matches = ids
         .iter()
         .copied()
         .filter(|id| id.to_string().starts_with(prefix));
     let Some(first) = matches.next() else {
-        return Err(AwcError::ProjectNotFound);
+        return Err(not_found);
     };
     if matches.next().is_some() {
-        return Err(AwcError::AmbiguousProjectId);
+        return Err(ambiguous);
     }
     Ok(first)
+}
+
+/// Resolves an ID prefix deterministically against the canonical hyphenated
+/// text form: exactly one match selects it, zero matches report not found,
+/// and two or more report ambiguity (design: Identity and lookup). This is
+/// the pure rule; the persistence layer supplies the candidate rows.
+pub fn resolve_id_prefix(prefix: &str, ids: &[Uuid]) -> Result<Uuid, AwcError> {
+    resolve_prefix(
+        prefix,
+        ids,
+        AwcError::ProjectNotFound,
+        AwcError::AmbiguousProjectId,
+    )
+}
+
+/// Artifact-typed exact-one prefix rule; see [`resolve_id_prefix`].
+pub fn resolve_artifact_id_prefix(prefix: &str, ids: &[Uuid]) -> Result<Uuid, AwcError> {
+    resolve_prefix(
+        prefix,
+        ids,
+        AwcError::ArtifactNotFound,
+        AwcError::AmbiguousArtifactId,
+    )
 }
 
 /// Outcome of one read-only diagnostic check (config, database, schema, path).
@@ -276,6 +379,9 @@ pub enum CommandResult {
     ProjectAdded(Project),
     ProjectList(Vec<Project>),
     ProjectShown(Project),
+    ArtifactCreated(Artifact),
+    ArtifactList(Vec<Artifact>),
+    ArtifactShown(Artifact),
 }
 
 #[cfg(test)]
@@ -368,5 +474,45 @@ mod tests {
     fn derived_slug_of_canonical_name_round_trips() {
         assert_eq!(derive_slug("my-project").unwrap(), "my-project");
         assert!(validate_slug(&derive_slug("Some Project").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_allows_only_approved_transitions() {
+        use ArtifactStatus::*;
+        for (from, to, legal) in [
+            (Active, Archived, true),
+            (Active, Trashed, true),
+            (Archived, Active, true),
+            (Trashed, Active, true),
+            (Archived, Trashed, false),
+            (Trashed, Archived, false),
+            (Active, Active, false),
+        ] {
+            assert_eq!(
+                can_transition(from, to).is_ok(),
+                legal,
+                "{from:?} -> {to:?}"
+            );
+        }
+        // Legacy names are not lifecycle statuses; Completed is rejected.
+        for legacy in ["tracked", "completed"] {
+            assert_eq!(ArtifactStatus::parse(legacy), None, "{legacy}");
+        }
+    }
+
+    #[test]
+    fn artifact_prefix_resolve_selects_one_zero_and_many() {
+        let a = Uuid::from_u128(0x1111_2222_3333_4444_5555_6666_7777_8888);
+        let b = Uuid::from_u128(0xaaaa_bbbb_cccc_dddd_eeee_ffff_0000_1111);
+        let twin = Uuid::from_u128(0x1111_aaaa_bbbb_cccc_dddd_eeee_ffff_0000);
+        assert_eq!(resolve_artifact_id_prefix("11112222", &[a, b]).unwrap(), a);
+        assert!(matches!(
+            resolve_artifact_id_prefix("9999", &[a, b]),
+            Err(AwcError::ArtifactNotFound)
+        ));
+        assert!(matches!(
+            resolve_artifact_id_prefix("1111", &[a, twin]),
+            Err(AwcError::AmbiguousArtifactId)
+        ));
     }
 }

@@ -36,12 +36,12 @@ Chain strategy pending: orchestrator/user decision required before apply (featur
 
 ## Phase 3: Apply and CLI
 
-- [ ] 3.1 RED: `apply_adopt` stale rejection: fingerprint mismatch → `stale_adopt_plan`, zero actions
-- [ ] 3.2 RED: per-action precondition re-check: source missing → skipped, remaining actions continue
-- [ ] 3.3 GREEN: `register_existing_artifact` use case + sqlite persistence: fingerprint from current bytes, path=original_path, audit, unowned + unique non-empty fingerprint invariants
-- [ ] 3.4 GREEN: move-to-inbox action with ArtifactFs compensation (failure leaves no mutation)
-- [ ] 3.5 RED: CLI contracts in `crates/awctl/tests/cli.rs`: `adopt scan/plan/apply` JSON v1, snake_case errors, exits 0/1/2/3
-- [ ] 3.6 GREEN: `adopt` subcommand tree + human/JSON v1 views in `main.rs`
+- [x] 3.1 RED: `apply_adopt` stale rejection: fingerprint mismatch → `stale_adopt_plan`, zero actions
+- [x] 3.2 RED: per-action precondition re-check: source missing → skipped, remaining actions continue
+- [x] 3.3 GREEN: `register_existing_artifact` use case + sqlite persistence: fingerprint from current bytes, path=original_path, audit, unowned + unique non-empty fingerprint invariants
+- [x] 3.4 GREEN: move-to-inbox action with ArtifactFs compensation (failure leaves no mutation)
+- [x] 3.5 RED: CLI contracts in `crates/awctl/tests/cli.rs`: `adopt scan/plan/apply` JSON v1, snake_case errors, exits 0/1/2/3
+- [x] 3.6 GREEN: `adopt` subcommand tree + human/JSON v1 views in `main.rs`
 
 ## Phase 4: Docs and Final Gates
 

@@ -11,7 +11,7 @@ use crate::domain::{
     resolve_artifact_id_prefix, resolve_id_prefix, validate_slug,
 };
 use crate::error::AwcError;
-use crate::infrastructure::adopt::{self, AdoptPlan, PlanAction, WorkspaceFingerprint};
+use crate::infrastructure::adopt::{self, AdoptPlan, PlanAction};
 use crate::infrastructure::artifacts::{ArtifactFs, OsFs};
 use crate::infrastructure::classify::{self, SuggestedAction};
 use crate::infrastructure::config;
@@ -579,6 +579,186 @@ pub fn plan_adopt(start: &Path) -> Result<CommandResult, AwcError> {
         plan_id: plan.id,
         actions: plan.actions.len(),
     })
+}
+
+/// Registers an EXISTING governed file under `artifacts/**` as an artifact:
+/// fingerprints the current bytes, requires an unowned path and a mandatory
+/// target project, and writes metadata + audit in one transaction. The file
+/// is not moved: its current path becomes both `path` and `original_path`.
+pub fn register_existing_artifact(
+    start: &Path,
+    project_id_or_prefix: &str,
+    rel_path: &str,
+    artifact_type: &str,
+    title: &str,
+) -> Result<CommandResult, AwcError> {
+    let (root, state_dir) = paths::discover_with_root(start)?;
+    let config = config::load_readonly(&state_dir)?;
+    let mut conn = sqlite::open_readwrite(&state_dir.join(&config.database_file))?;
+
+    let project_candidates = sqlite::select_projects_by_id_prefix(&conn, project_id_or_prefix)?;
+    let project_ids: Vec<Uuid> = project_candidates.iter().map(|p| p.id.0).collect();
+    let project_id = resolve_id_prefix(project_id_or_prefix, &project_ids)?;
+    let _project = project_candidates
+        .into_iter()
+        .find(|p| p.id.0 == project_id)
+        .ok_or(AwcError::ProjectNotFound)?;
+
+    let target = paths::validate_artifact_target(&root, rel_path)?;
+    let target_str = target.to_string_lossy().to_string();
+    if sqlite::path_is_owned(&conn, &target_str, None)? {
+        return Err(AwcError::PathOwned(rel_path.to_string()));
+    }
+    let fingerprint = crate::infrastructure::hash::fingerprint_file(&target)?;
+    if sqlite::fingerprint_is_duplicate(&conn, &fingerprint.sha256, fingerprint.size, None)? {
+        return Err(AwcError::DuplicateFingerprint(fingerprint.sha256));
+    }
+    let now = chrono_now();
+    let artifact = Artifact {
+        id: ArtifactId::new(),
+        project_id: ProjectId(project_id),
+        artifact_type: artifact_type.to_string(),
+        title: title.to_string(),
+        path: Some(target.clone()),
+        original_path: Some(target.clone()),
+        status: ArtifactStatus::Active,
+        sha256: Some(fingerprint.sha256),
+        size: Some(fingerprint.size),
+        last_seen_at: now.clone(),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    sqlite::register_artifact(&mut conn, &artifact)?;
+    Ok(CommandResult::ArtifactShown(artifact))
+}
+
+/// Applies an adopt plan per action: revalidates the workspace fingerprint
+/// (stale → `StaleAdoptPlan`, zero actions), then for each action re-checks
+/// its preconditions immediately before executing. Register actions call
+/// `register_existing_artifact`; move-to-inbox actions move the file with
+/// compensation. Reports applied/skipped; a failure does not block remaining
+/// actions. Uses the workspace's single project by default.
+pub fn apply_adopt(start: &Path, plan_id: &str) -> Result<CommandResult, AwcError> {
+    apply_adopt_with_project(start, plan_id, None)
+}
+
+/// Like [`apply_adopt`] but with an explicit target project for registered
+/// artifacts.
+pub fn apply_adopt_with_project(
+    start: &Path,
+    plan_id: &str,
+    project_id_or_prefix: Option<&str>,
+) -> Result<CommandResult, AwcError> {
+    let (root, state_dir) = paths::discover_with_root(start)?;
+    let plan = adopt::load_plan(&state_dir, plan_id)?;
+    let fresh = adopt::workspace_fingerprint(&root)?;
+    if fresh.digest != plan.fingerprint.digest {
+        return Err(AwcError::StaleAdoptPlan(
+            "workspace changed since the plan was created".into(),
+        ));
+    }
+    let project = match project_id_or_prefix {
+        Some(pid) => pid.to_string(),
+        None => default_project(start)?,
+    };
+    let mut applied = 0;
+    let mut skipped = 0;
+    for action in &plan.actions {
+        match action {
+            PlanAction::Register {
+                rel_path,
+                artifact_type,
+            } => {
+                let source = root.join(rel_path);
+                if !source.exists() {
+                    skipped += 1;
+                    continue;
+                }
+                // Move the candidate under artifacts/ (the only writable
+                // lifecycle target), then register; on registration failure
+                // move the file back (compensation).
+                let basename = source
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let target_rel = format!("artifacts/{basename}");
+                let target = match paths::validate_artifact_target(&root, &target_rel) {
+                    Ok(t) if !t.exists() => t,
+                    _ => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                let fs = OsFs;
+                if let Err(_) = fs.move_file(&source, &target) {
+                    skipped += 1;
+                    continue;
+                }
+                match register_existing_artifact(
+                    start,
+                    &project,
+                    &target_rel,
+                    artifact_type,
+                    rel_path,
+                ) {
+                    Ok(_) => applied += 1,
+                    Err(_) => {
+                        let _ = fs.move_file(&target, &source);
+                        skipped += 1;
+                    }
+                }
+            }
+            PlanAction::MoveToInbox { rel_path } => {
+                let source = root.join(rel_path);
+                if !source.exists() {
+                    skipped += 1;
+                    continue;
+                }
+                let inbox = paths::ensure_governed_dir(&root, "inbox")?;
+                let target = inbox.join(
+                    source
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                );
+                if target.exists() {
+                    skipped += 1;
+                    continue;
+                }
+                let fs = OsFs;
+                match fs.move_file(&source, &target) {
+                    Ok(()) => applied += 1,
+                    Err(_) => skipped += 1,
+                }
+            }
+            PlanAction::Skip { .. } => skipped += 1,
+        }
+    }
+    Ok(CommandResult::AdoptApplied {
+        plan_id: plan_id.to_string(),
+        applied,
+        skipped,
+    })
+}
+
+/// Resolves the single project of the workspace for adopt registration, or
+/// fails with a clear usage error when none or several exist.
+fn default_project(start: &Path) -> Result<String, AwcError> {
+    let (_, state_dir) = paths::discover_with_root(start)?;
+    let config = config::load_readonly(&state_dir)?;
+    let conn = sqlite::open_readonly(&state_dir.join(&config.database_file))?;
+    let projects = sqlite::select_projects_by_id_prefix(&conn, "")?;
+    match projects.len() {
+        1 => Ok(projects[0].id.0.to_string()),
+        0 => Err(AwcError::Usage(
+            "adopt apply requires a project; run `awctl project add` first".into(),
+        )),
+        _ => Err(AwcError::Usage(
+            "adopt apply requires exactly one project, or pass --project".into(),
+        )),
+    }
 }
 
 /// Resolves exactly one artifact by ID prefix against the persistence layer.
@@ -1307,6 +1487,131 @@ mod tests {
         // Fingerprint matches a fresh computation.
         let fresh = adopt::workspace_fingerprint(&root).expect("fingerprint");
         assert_eq!(plan.fingerprint, fresh);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn register_existing_artifact_registers_current_bytes() {
+        let (root, project_id) = seeded_workspace("adopt-register");
+        let target = root.join("artifacts").join("existing.md");
+        fs::create_dir_all(root.join("artifacts")).unwrap();
+        fs::write(&target, b"hello adopt").expect("write");
+        let CommandResult::ArtifactShown(a) = register_existing_artifact(
+            &root,
+            &project_id,
+            "artifacts/existing.md",
+            "plan",
+            "existing",
+        )
+        .expect("register") else {
+            panic!("expected ArtifactShown");
+        };
+        assert_eq!(a.size, Some(11));
+        assert_eq!(a.status, ArtifactStatus::Active);
+        assert!(a.path.as_ref().unwrap().exists());
+        // Duplicate registration of the same path fails.
+        assert!(matches!(
+            register_existing_artifact(&root, &project_id, "artifacts/existing.md", "plan", "x")
+                .expect_err("owned"),
+            AwcError::PathOwned(_)
+        ));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adopt_apply_rejects_stale_plan_without_actions() {
+        let root = temp_dir("adopt-stale");
+        init(&root).expect("init");
+        fs::write(root.join("adopt-plan.md"), b"# Plan").expect("plan");
+        let CommandResult::AdoptPlanCreated { plan_id, .. } = plan_adopt(&root).expect("plan")
+        else {
+            panic!("expected plan");
+        };
+        // Mutate the workspace after planning.
+        fs::write(root.join("adopt-plan.md"), b"# CHANGED").expect("change");
+        assert!(matches!(
+            apply_adopt(&root, &plan_id).expect_err("stale"),
+            AwcError::StaleAdoptPlan(_)
+        ));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adopt_apply_skips_missing_source_and_continues() {
+        let root = temp_dir("adopt-skip");
+        init(&root).expect("init");
+        let CommandResult::ProjectAdded(p) = add_project(
+            &root,
+            AddProject {
+                name: "D".to_string(),
+                slug: None,
+                root_path: None,
+            },
+        )
+        .expect("proj") else {
+            panic!("expected project");
+        };
+        fs::write(root.join("review-a.md"), b"# A").expect("a");
+        fs::write(root.join("review-b.md"), b"# B").expect("b");
+        let CommandResult::AdoptPlanCreated { plan_id, .. } = plan_adopt(&root).expect("plan")
+        else {
+            panic!("expected plan");
+        };
+        // Occupy artifacts/review-a.md WITHOUT touching the source (the
+        // fingerprint excludes artifacts/, so the plan stays valid): the
+        // apply action for review-a.md must skip (target occupied) while
+        // review-b.md still applies.
+        fs::create_dir_all(root.join("artifacts")).unwrap();
+        fs::write(root.join("artifacts").join("review-a.md"), b"occupied").unwrap();
+        let CommandResult::AdoptApplied {
+            applied, skipped, ..
+        } = apply_adopt_with_project(&root, &plan_id, Some(&p.id.0.to_string())).expect("apply")
+        else {
+            panic!("expected AdoptApplied");
+        };
+        assert_eq!(applied, 1, "review-b registers");
+        assert_eq!(skipped, 1, "review-a target occupied is skipped");
+        // review-b is now registered: its file moved to artifacts/.
+        assert!(!root.join("review-b.md").exists(), "moved into artifacts");
+        assert!(root.join("artifacts").join("review-b.md").exists());
+        let (_, state_dir) = paths::discover_with_root(&root).expect("discover");
+        let config = config::load_readonly(&state_dir).unwrap();
+        let conn = sqlite::open_readonly(&state_dir.join(&config.database_file)).unwrap();
+        let artifacts = sqlite::list_artifacts(&conn, None, None, None).expect("list");
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(
+            artifacts[0].path.as_deref(),
+            Some(root.join("artifacts").join("review-b.md").as_path())
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adopt_apply_moves_unknown_to_inbox() {
+        let root = temp_dir("adopt-inbox");
+        init(&root).expect("init");
+        add_project(
+            &root,
+            AddProject {
+                name: "D".to_string(),
+                slug: None,
+                root_path: None,
+            },
+        )
+        .expect("proj");
+        fs::write(root.join("notes.md"), b"notes").expect("notes");
+        let CommandResult::AdoptPlanCreated { plan_id, .. } = plan_adopt(&root).expect("plan")
+        else {
+            panic!("expected plan");
+        };
+        let CommandResult::AdoptApplied { applied, .. } =
+            apply_adopt(&root, &plan_id).expect("apply")
+        else {
+            panic!("expected apply");
+        };
+        assert_eq!(applied, 1);
+        assert!(!root.join("notes.md").exists(), "moved out");
+        assert!(root.join("inbox").join("notes.md").exists(), "in inbox");
         fs::remove_dir_all(&root).ok();
     }
 }

@@ -453,3 +453,62 @@ fn artifact_relink_refreshes_fingerprint_and_rejects_occupied_target() {
     assert!(doc["data"]["artifact"]["sha256"].as_str().is_some());
     fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn adopt_scan_plan_apply_json_contract() {
+    let dir = temp_dir("adopt-cli");
+    run_in(&dir, &["init"]);
+    envelope(
+        true,
+        &run_in(&dir, &["project", "add", "--name", "Demo", "--json"]),
+    );
+
+    // Scan: read-only, JSON v1, categorized data.
+    std::fs::write(dir.join("adopt-plan.md"), b"# Plan").unwrap();
+    std::fs::write(dir.join("notes.md"), b"notes").unwrap();
+    let out = run_in(&dir, &["adopt", "scan", "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let doc = envelope(true, &out);
+    let candidates = doc["data"]["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(candidates[0]["category"], "managed_candidate");
+    assert_eq!(candidates[1]["category"], "unknown");
+
+    // Plan: persists explicit actions.
+    let out = run_in(&dir, &["adopt", "plan", "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let plan_id = envelope(true, &out)["data"]["plan_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Apply: registers plan + moves notes to inbox.
+    let out = run_in(&dir, &["adopt", "apply", &plan_id, "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let doc = envelope(true, &out);
+    assert_eq!(doc["data"]["applied"], 2);
+    assert_eq!(doc["data"]["skipped"], 0);
+    assert!(dir.join("artifacts").join("adopt-plan.md").exists());
+    assert!(dir.join("inbox").join("notes.md").exists());
+
+    // Apply with missing plan -> adopt_plan_not_found, exit 1.
+    let out = run_in(&dir, &["adopt", "apply", "nope", "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        envelope(false, &out)["error"]["code"],
+        "adopt_plan_not_found"
+    );
+
+    // Apply with stale plan -> stale_adopt_plan, exit 1.
+    std::fs::write(dir.join("new-file.md"), b"x").unwrap();
+    let out = run_in(&dir, &["adopt", "plan", "--json"]);
+    let plan2 = envelope(true, &out)["data"]["plan_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    std::fs::write(dir.join("new-file.md"), b"changed").unwrap();
+    let out = run_in(&dir, &["adopt", "apply", &plan2, "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(envelope(false, &out)["error"]["code"], "stale_adopt_plan");
+    fs::remove_dir_all(&dir).ok();
+}

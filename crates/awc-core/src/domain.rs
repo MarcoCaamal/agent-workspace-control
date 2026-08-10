@@ -131,6 +131,40 @@ pub enum PathOwnership {
     Unmanaged,
 }
 
+/// Adopt scan classification category (design: Adopt classification).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScanCategory {
+    KnownRuntime,
+    ManagedCandidate,
+    TemporaryCandidate,
+    SensitiveCandidate,
+    Unknown,
+    Ignored,
+}
+
+impl ScanCategory {
+    /// Canonical snake_case text form for views and errors.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::KnownRuntime => "known_runtime",
+            Self::ManagedCandidate => "managed_candidate",
+            Self::TemporaryCandidate => "temporary_candidate",
+            Self::SensitiveCandidate => "sensitive_candidate",
+            Self::Unknown => "unknown",
+            Self::Ignored => "ignored",
+        }
+    }
+}
+
+/// One classified adopt candidate: workspace-relative path, category, and a
+/// suggested artifact type when the candidate is managed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptCandidate {
+    pub rel_path: String,
+    pub category: ScanCategory,
+    pub suggested_type: Option<String>,
+}
+
 /// A governed artifact (design: Lifecycle model). `path` is the current
 /// location; `original_path` is the creation location used as the restore
 /// target (v3 backfills it from `path`); both optional for legacy rows.
@@ -382,6 +416,16 @@ pub enum CommandResult {
     ArtifactCreated(Artifact),
     ArtifactList(Vec<Artifact>),
     ArtifactShown(Artifact),
+    AdoptScan(Vec<AdoptCandidate>),
+    AdoptPlanCreated {
+        plan_id: String,
+        actions: usize,
+    },
+    AdoptApplied {
+        plan_id: String,
+        applied: usize,
+        skipped: usize,
+    },
 }
 
 #[cfg(test)]

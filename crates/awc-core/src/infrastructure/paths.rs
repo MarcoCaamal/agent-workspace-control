@@ -1,8 +1,10 @@
 //! Upward `.awc` discovery with canonical symlink containment.
 
+use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use crate::domain::PathOwnership;
 use crate::error::AwcError;
 
 /// Name of the workspace state directory searched on each ancestor.
@@ -85,6 +87,76 @@ pub fn ensure_governed_dir(root: &Path, name: &str) -> Result<PathBuf, AwcError>
         }
         Err(err) => Err(AwcError::Io(err)),
     }
+}
+
+/// Classifies a workspace-relative path by its first component against the
+/// fixed policy set (design: Path policy). Pure lexical, no fs access.
+pub fn classify_path(rel: &Path) -> PathOwnership {
+    let Some(Component::Normal(first)) = rel.components().next() else {
+        return PathOwnership::Unmanaged;
+    };
+    match first.to_str().unwrap_or("") {
+        ".awc" | "artifacts" | "inbox" | "tmp" | "trash" => PathOwnership::AwcManaged,
+        "AGENTS.md" | "SOUL.md" | "MEMORY.md" | "memory" | "skills" => {
+            PathOwnership::AgentRuntimeManaged
+        }
+        "docs" => PathOwnership::UserManaged,
+        ".git" | "target" => PathOwnership::Ignored,
+        _ => PathOwnership::Unmanaged,
+    }
+}
+
+/// Validates `rel` as an artifact write target under the canonical `root`:
+/// lexical normalization (relative, no `..`), ownership policy (only
+/// `artifacts/**` is writable), canonical containment of existing
+/// components, and no symlink anywhere along the path. Escapes/symlinks →
+/// [`AwcError::PathEscape`], protected paths → [`AwcError::ProtectedPath`],
+/// other non-artifacts paths → [`AwcError::PathOwned`].
+pub fn validate_artifact_target(root: &Path, rel: &str) -> Result<PathBuf, AwcError> {
+    let rel = Path::new(rel);
+    if rel.is_absolute() || rel.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(AwcError::PathEscape(rel.display().to_string()));
+    }
+    let parts: Vec<&OsStr> = rel
+        .components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .map(|c| c.as_os_str())
+        .collect();
+    if parts.is_empty() {
+        return Err(AwcError::PathEscape(rel.display().to_string()));
+    }
+    let rel: PathBuf = parts.iter().collect();
+    let path = rel.display().to_string();
+
+    match classify_path(&rel) {
+        PathOwnership::AgentRuntimeManaged => return Err(AwcError::ProtectedPath(path)),
+        PathOwnership::AwcManaged if parts[0] == OsStr::new("artifacts") => {}
+        _ => return Err(AwcError::PathOwned(path)),
+    }
+
+    let root = fs::canonicalize(root).map_err(AwcError::Io)?;
+    let components: Vec<Component<'_>> = rel.components().collect();
+    let mut current = root.clone();
+    for component in components.iter() {
+        let candidate = current.join(component.as_os_str());
+        match fs::symlink_metadata(&candidate) {
+            Ok(meta) => {
+                // Any symlink component — final or intermediate, contained or
+                // escaping — is rejected; canonical targets are never followed.
+                if meta.file_type().is_symlink() {
+                    return Err(AwcError::PathEscape(path.clone()));
+                }
+                let canonical = fs::canonicalize(&candidate).map_err(AwcError::Io)?;
+                if !canonical.starts_with(&root) {
+                    return Err(AwcError::PathEscape(path.clone()));
+                }
+                current = canonical;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => current = candidate,
+            Err(err) => return Err(AwcError::Io(err)),
+        }
+    }
+    Ok(current)
 }
 
 #[cfg(all(test, unix))]
@@ -284,6 +356,90 @@ mod tests {
             AwcError::UnsafeStatePath
         ));
         assert_eq!(fs::read(&marker).unwrap(), b"untouched");
+        fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&outside).ok();
+    }
+
+    fn expect_protected(root: &Path, path: &str) {
+        let err = validate_artifact_target(root, path).unwrap_err();
+        assert!(matches!(err, AwcError::ProtectedPath(_)), "{path}");
+    }
+
+    fn expect_owned(root: &Path, path: &str) {
+        let err = validate_artifact_target(root, path).unwrap_err();
+        assert!(matches!(err, AwcError::PathOwned(_)), "{path}");
+    }
+
+    fn expect_escape(root: &Path, path: &str) {
+        let err = validate_artifact_target(root, path).unwrap_err();
+        assert!(matches!(err, AwcError::PathEscape(_)), "{path:?}");
+    }
+
+    #[test]
+    fn classify_assigns_fixed_ownership_classes() {
+        for (path, expected) in [
+            ("artifacts/a.txt", PathOwnership::AwcManaged),
+            ("AGENTS.md", PathOwnership::AgentRuntimeManaged),
+            ("memory/notes.md", PathOwnership::AgentRuntimeManaged),
+            (".git/config", PathOwnership::Ignored),
+            ("docs/readme.md", PathOwnership::UserManaged),
+            ("src/main.rs", PathOwnership::Unmanaged),
+        ] {
+            assert_eq!(classify_path(Path::new(path)), expected, "{path}");
+        }
+    }
+
+    #[test]
+    fn artifact_target_enforces_containment_ownership_and_symlinks() {
+        let root = temp_dir("target");
+        let outside = temp_dir("target-outside");
+        fs::create_dir_all(root.join("artifacts")).unwrap();
+        assert_eq!(
+            validate_artifact_target(&root, "artifacts/new.txt").unwrap(),
+            canonical(&root).join("artifacts").join("new.txt")
+        );
+        assert!(validate_artifact_target(&root, "artifacts/deep/nested.txt").is_ok());
+        for path in ["AGENTS.md", "memory/notes.md"] {
+            expect_protected(&root, path);
+        }
+        for path in [
+            "docs/readme.md",
+            "src/main.rs",
+            ".git/config",
+            "target/app",
+            ".awc/state.sqlite3",
+            "inbox/x",
+            "tmp/x",
+            "trash/x",
+        ] {
+            expect_owned(&root, path);
+        }
+        for path in ["../up", "artifacts/../x", "/etc/passwd", ""] {
+            expect_escape(&root, path);
+        }
+        // A symlinked `artifacts` dir escaping the root is rejected...
+        fs::remove_dir_all(root.join("artifacts")).unwrap();
+        symlink(&outside, root.join("artifacts")).unwrap();
+        expect_escape(&root, "artifacts/x.txt");
+        // ...as is a CONTAINED intermediate symlink (never followed, even
+        // when its canonical target stays inside the root).
+        fs::remove_dir_all(root.join("artifacts")).unwrap();
+        fs::create_dir_all(root.join("artifacts").join("real")).unwrap();
+        symlink(
+            root.join("artifacts").join("real"),
+            root.join("artifacts").join("link"),
+        )
+        .unwrap();
+        expect_escape(&root, "artifacts/link/x.txt");
+        // ...as is a dangling final-component symlink (never followed).
+        fs::remove_dir_all(root.join("artifacts")).unwrap();
+        fs::create_dir_all(root.join("artifacts")).unwrap();
+        symlink(
+            outside.join("gone"),
+            root.join("artifacts").join("dangling"),
+        )
+        .unwrap();
+        expect_escape(&root, "artifacts/dangling");
         fs::remove_dir_all(&root).ok();
         fs::remove_dir_all(&outside).ok();
     }

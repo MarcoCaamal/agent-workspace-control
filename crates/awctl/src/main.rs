@@ -291,6 +291,16 @@ fn render_error(json: bool, err: &AwcError) {
             AwcError::SlugConflict(_) => ("slug_conflict", err.to_string()),
             AwcError::LegacySchemaData => ("legacy_schema_data", err.to_string()),
             AwcError::InvalidSlug(_) => ("invalid_slug", err.to_string()),
+            AwcError::ArtifactNotFound => ("artifact_not_found", err.to_string()),
+            AwcError::AmbiguousArtifactId => ("ambiguous_artifact_id", err.to_string()),
+            AwcError::ArtifactStatusConflict(..) => ("artifact_status_conflict", err.to_string()),
+            AwcError::PathOwned(_) => ("path_owned", err.to_string()),
+            AwcError::ProtectedPath(_) => ("protected_path", err.to_string()),
+            AwcError::PathEscape(_) => ("path_escape", err.to_string()),
+            AwcError::MigrationConflict(_) => ("migration_conflict", err.to_string()),
+            AwcError::RestoreConflict(_) => ("restore_conflict", err.to_string()),
+            AwcError::DuplicateFingerprint(_) => ("duplicate_fingerprint", err.to_string()),
+            AwcError::CompensationFailed(_) => ("compensation_failed", err.to_string()),
         };
         write_json(&JsonDoc {
             schema_version: 1,

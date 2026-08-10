@@ -27,8 +27,8 @@ Chain strategy pending: orchestrator/user decision required before apply.
 - [x] 1.2 GREEN: `ArtifactStatus`/`Artifact`/`PathOwnership`/views/prefix rule in `domain.rs`
 - [x] 1.3 RED: ownership/containment in `paths.rs`: protected/ignored/user-managed/symlink/escape
 - [x] 1.4 GREEN: `PathOwnership` classification + canonical containment in `paths.rs`
-- [ ] 1.5 RED: v3 migration in `sqlite.rs`: tracked→active, backfill, duplicate-path fail (Slice 1B)
-- [ ] 1.6 GREEN: migration v3 + partial unique indexes (path; sha256>0) in `sqlite.rs` (Slice 1B)
+- [x] 1.5 RED: v3 migration in `sqlite.rs`: tracked→active, backfill, duplicate-path fail (Slice 1B)
+- [x] 1.6 GREEN: migration v3 + partial unique indexes (path; sha256>0) in `sqlite.rs` (Slice 1B)
 - [x] 1.7 Add errors (`artifact_not_found`…`duplicate_fingerprint`, `CompensationFailed`) to `error.rs`, exits 0/1/2/3
 
 ## Phase 2: Persistence/Filesystem Compensation

@@ -68,6 +68,23 @@ const MIGRATIONS: &[&str] = &[
         event_type TEXT NOT NULL,
         occurred_at TEXT NOT NULL DEFAULT (datetime('now'))
     );",
+    // v3: additive lifecycle alignment. Guarded by [`migrate_v3`]: it runs
+    // only when every legacy artifact row can be canonicalized (unknown
+    // statuses, duplicate non-null paths, and duplicate non-empty
+    // fingerprints refuse the migration). Canonicalizes `tracked` to
+    // `active`, backfills `updated_at`/`original_path` from
+    // `created_at`/`path`, then enforces uniqueness with partial indexes:
+    // non-NULL `path` and `sha256 WHERE size > 0` (empty artifacts share
+    // the empty fingerprint) (design: Migration/indexes).
+    "UPDATE artifacts SET status = 'active' WHERE status = 'tracked';
+    ALTER TABLE artifacts ADD COLUMN updated_at TEXT;
+    ALTER TABLE artifacts ADD COLUMN original_path TEXT;
+    UPDATE artifacts SET updated_at = created_at WHERE updated_at IS NULL;
+    UPDATE artifacts SET original_path = path WHERE original_path IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_artifacts_path
+        ON artifacts(path) WHERE path IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_artifacts_fingerprint
+        ON artifacts(sha256) WHERE size > 0;",
 ];
 
 /// Opens an existing database strictly read-only; never creates the file.
@@ -175,7 +192,8 @@ pub fn select_projects_by_id_prefix(
 /// transaction, recording every applied version in the ledger. Rerunning is
 /// idempotent; the ledger is authoritative. Version 2 first refuses the
 /// migration when any v0.1 foundation table holds rows, leaving the database
-/// untouched (design: Schema v2).
+/// untouched (design: Schema v2). Version 3 first refuses the migration when
+/// legacy artifact rows cannot be canonicalized (design: Migration/indexes).
 pub fn migrate(conn: &mut Connection) -> Result<(), AwcError> {
     conn.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
@@ -194,8 +212,10 @@ pub fn migrate(conn: &mut Connection) -> Result<(), AwcError> {
             continue;
         }
         let tx = conn.transaction()?;
-        if version == 2 {
-            refuse_populated_legacy(&tx)?;
+        match version {
+            2 => refuse_populated_legacy(&tx)?,
+            3 => migrate_v3(&tx)?,
+            _ => {}
         }
         tx.execute_batch(sql)?;
         tx.execute(
@@ -218,6 +238,53 @@ fn refuse_populated_legacy(tx: &rusqlite::Transaction<'_>) -> Result<(), AwcErro
         if rows > 0 {
             return Err(AwcError::LegacySchemaData);
         }
+    }
+    Ok(())
+}
+
+/// Refuses the v3 migration when legacy artifact rows cannot be
+/// canonicalized: an unknown status, duplicate non-null paths, or duplicate
+/// non-empty fingerprints would make the lifecycle alignment unsafe. Runs
+/// before any v3 DDL inside the migration transaction, so refusal rolls back
+/// without mutation: no schema change, no data change, ledger untouched
+/// (design: Migration/indexes).
+fn migrate_v3(tx: &rusqlite::Transaction<'_>) -> Result<(), AwcError> {
+    let mut stmt = tx.prepare("SELECT DISTINCT status FROM artifacts")?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let status: String = row.get(0)?;
+        if !matches!(
+            status.as_str(),
+            "tracked" | "active" | "archived" | "trashed"
+        ) {
+            return Err(AwcError::MigrationConflict(format!(
+                "unknown artifact status {status:?}"
+            )));
+        }
+    }
+    let duplicate: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT path FROM artifacts WHERE path IS NOT NULL GROUP BY path HAVING COUNT(*) > 1
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if duplicate > 0 {
+        return Err(AwcError::MigrationConflict(
+            "duplicate non-null artifact paths".into(),
+        ));
+    }
+    let duplicate: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM (
+            SELECT sha256 FROM artifacts WHERE size > 0 GROUP BY sha256 HAVING COUNT(*) > 1
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    if duplicate > 0 {
+        return Err(AwcError::MigrationConflict(
+            "duplicate non-empty artifact fingerprints".into(),
+        ));
     }
     Ok(())
 }
@@ -308,7 +375,7 @@ mod tests {
         let mut conn = open(&dir.join("state.sqlite3")).expect("open db");
         migrate(&mut conn).expect("first migrate");
         migrate(&mut conn).expect("second migrate");
-        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        assert_eq!(ledger_versions(&conn), vec![1, 2, 3]);
         assert_eq!(schema_health(&conn).expect("health"), true);
         fs::remove_dir_all(&dir).ok();
     }
@@ -432,16 +499,261 @@ mod tests {
             .join(",")
     }
 
+    /// Simulates a schema-v2 workspace database: the ledger records versions
+    /// 1 and 2 and the v2 schema is applied, so only v3 remains pending.
+    fn v2_db(dir: &std::path::Path) -> Connection {
+        let conn = open(&dir.join("state.sqlite3")).expect("open db");
+        conn.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS {MIGRATIONS_TABLE} (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );"
+        ))
+        .expect("create ledger");
+        conn.execute_batch(MIGRATIONS[0]).expect("apply v1 schema");
+        conn.execute_batch(MIGRATIONS[1]).expect("apply v2 schema");
+        conn.execute(
+            &format!("INSERT INTO {MIGRATIONS_TABLE} (version) VALUES (1), (2)"),
+            [],
+        )
+        .expect("record v1 and v2 in ledger");
+        conn
+    }
+
+    const V2_PROJECT_ID: &str = "11111111-1111-7111-8111-111111111111";
+
+    /// Seeds one v2 artifact row (and its project) so v3 has legacy data to
+    /// align or refuse. `created_at` is fixed so backfill assertions are
+    /// deterministic.
+    fn seed_v2_artifact(
+        conn: &Connection,
+        id: &str,
+        path: Option<&str>,
+        status: &str,
+        sha256: Option<&str>,
+        size: Option<i64>,
+    ) {
+        conn.execute(
+            "INSERT OR IGNORE INTO projects (id, slug, name) \
+             VALUES ('11111111-1111-7111-8111-111111111111', 'demo', 'Demo')",
+            [],
+        )
+        .expect("seed project");
+        conn.execute(
+            "INSERT INTO artifacts (id, project_id, artifact_type, title, path, status, \
+             sha256, size, created_at, last_seen_at) \
+             VALUES (?1, ?2, 'doc', ?1, ?3, ?4, ?5, ?6, '2026-01-01T00:00:00Z', \
+             '2026-01-01T00:00:00Z')",
+            rusqlite::params![id, V2_PROJECT_ID, path, status, sha256, size],
+        )
+        .expect("seed artifact");
+    }
+
+    #[test]
+    fn migrate_v3_aligns_tracked_status_and_backfills_timestamps() {
+        let dir = temp_dir("v3-align");
+        let mut conn = v2_db(&dir);
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            Some("artifacts/a.txt"),
+            "tracked",
+            None,
+            None,
+        );
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            None,
+            "archived",
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+            Some(0),
+        );
+        migrate(&mut conn).expect("v3 aligns legacy rows");
+        assert_eq!(ledger_versions(&conn), vec![1, 2, 3]);
+        assert!(schema_health(&conn).expect("health"));
+        let (status, updated_at, original_path): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT status, updated_at, original_path FROM artifacts WHERE id = ?1",
+                ["aaaaaaaa-0000-0000-0000-000000000001"],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("read migrated row");
+        assert_eq!(status, "active", "tracked must canonicalize to active");
+        assert_eq!(
+            updated_at, "2026-01-01T00:00:00Z",
+            "updated_at backfilled from created_at"
+        );
+        assert_eq!(
+            original_path.as_deref(),
+            Some("artifacts/a.txt"),
+            "original_path backfilled from path"
+        );
+        let (status, original_path): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, original_path FROM artifacts WHERE id = ?1",
+                ["aaaaaaaa-0000-0000-0000-000000000002"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read second migrated row");
+        assert_eq!(status, "archived", "canonical statuses are preserved");
+        assert_eq!(original_path, None, "NULL path stays NULL");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_v3_rejects_duplicate_paths_without_mutation() {
+        let dir = temp_dir("v3-dup-path");
+        let mut conn = v2_db(&dir);
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            Some("artifacts/a.txt"),
+            "tracked",
+            None,
+            None,
+        );
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            Some("artifacts/a.txt"),
+            "tracked",
+            None,
+            None,
+        );
+        let err = migrate(&mut conn).expect_err("duplicate non-null paths must refuse v3");
+        assert!(matches!(err, AwcError::MigrationConflict(_)));
+        assert_eq!(
+            ledger_versions(&conn),
+            vec![1, 2],
+            "v3 must not be recorded"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))
+            .expect("count rows");
+        assert_eq!(rows, 2, "legacy rows must be unchanged");
+        assert!(
+            !columns(&conn, "artifacts").contains("updated_at"),
+            "no v3 DDL may run"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_v3_rejects_unknown_status_without_mutation() {
+        let dir = temp_dir("v3-unknown");
+        let mut conn = v2_db(&dir);
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            Some("artifacts/a.txt"),
+            "weird",
+            None,
+            None,
+        );
+        let err = migrate(&mut conn).expect_err("unknown status must refuse v3");
+        assert!(matches!(err, AwcError::MigrationConflict(_)));
+        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        assert!(
+            !columns(&conn, "artifacts").contains("updated_at"),
+            "no v3 DDL may run"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_v3_rejects_duplicate_non_empty_fingerprints_without_mutation() {
+        let dir = temp_dir("v3-dup-hash");
+        let mut conn = v2_db(&dir);
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000001",
+            Some("artifacts/a.txt"),
+            "tracked",
+            Some("abc"),
+            Some(5),
+        );
+        seed_v2_artifact(
+            &conn,
+            "aaaaaaaa-0000-0000-0000-000000000002",
+            Some("artifacts/b.txt"),
+            "tracked",
+            Some("abc"),
+            Some(5),
+        );
+        let err = migrate(&mut conn).expect_err("duplicate non-empty fingerprints must refuse v3");
+        assert!(matches!(err, AwcError::MigrationConflict(_)));
+        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn migrate_v3_creates_lifecycle_indexes_and_enforces_them() {
+        let dir = temp_dir("v3-indexes");
+        let conn = migrate_at(&dir);
+        let path_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ux_artifacts_path'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("path uniqueness index");
+        assert!(path_sql.contains("path IS NOT NULL"), "{path_sql}");
+        let fingerprint_sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'ux_artifacts_fingerprint'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("fingerprint uniqueness index");
+        assert!(fingerprint_sql.contains("size > 0"), "{fingerprint_sql}");
+        conn.execute(
+            "INSERT INTO projects (id, slug, name) \
+             VALUES ('11111111-1111-7111-8111-111111111111', 'demo', 'Demo')",
+            [],
+        )
+        .expect("insert project");
+        let mut seq = 0_u32;
+        let mut insert = |path: Option<&str>, sha: Option<&str>, size: Option<i64>| {
+            seq += 1;
+            conn.execute(
+                "INSERT INTO artifacts (id, project_id, artifact_type, title, path, status, \
+                 sha256, size) VALUES (?1, ?2, 'doc', ?1, ?3, 'active', ?4, ?5)",
+                rusqlite::params![
+                    format!("aaaaaaaa-0000-0000-0000-0000000000{seq:02}"),
+                    V2_PROJECT_ID,
+                    path,
+                    sha,
+                    size
+                ],
+            )
+        };
+        insert(Some("artifacts/one.txt"), Some("1111"), Some(1)).expect("first insert");
+        let err = insert(Some("artifacts/one.txt"), Some("2222"), Some(2))
+            .expect_err("duplicate path must be rejected");
+        assert!(err.to_string().contains("UNIQUE"), "{err}");
+        insert(Some("artifacts/two.txt"), Some("3333"), Some(3)).expect("second insert");
+        let err = insert(Some("artifacts/three.txt"), Some("3333"), Some(4))
+            .expect_err("duplicate non-empty fingerprint must be rejected");
+        assert!(err.to_string().contains("UNIQUE"), "{err}");
+        insert(Some("artifacts/empty-a.txt"), Some("empty"), Some(0)).expect("empty artifact");
+        insert(Some("artifacts/empty-b.txt"), Some("empty"), Some(0))
+            .expect("second empty artifact shares the empty fingerprint");
+        insert(None, None, None).expect("NULL path is not unique-constrained");
+        insert(None, None, None).expect("second NULL path row");
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn migrate_v2_creates_full_metadata_schema_and_records_ledger() {
         let dir = temp_dir("v2-shape");
         let conn = migrate_at(&dir);
-        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        assert_eq!(ledger_versions(&conn), vec![1, 2, 3]);
         assert!(columns(&conn, "projects").contains("id,slug,name,root_path,status,created_at"));
-        assert!(
-            columns(&conn, "artifacts")
-                .contains("id,project_id,artifact_type,title,path,status,sha256,size")
-        );
+        assert!(columns(&conn, "artifacts").contains(
+            "id,project_id,artifact_type,title,path,status,sha256,size,last_seen_at,\
+                 created_at,updated_at,original_path"
+        ));
         assert!(
             columns(&conn, "audit_events")
                 .contains("id,project_id,artifact_id,event_type,occurred_at")
@@ -450,11 +762,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_v1_database_migrates_to_v2() {
+    fn empty_v1_database_migrates_through_latest() {
         let dir = temp_dir("legacy-empty");
         let mut conn = v1_db(&dir, false);
-        migrate(&mut conn).expect("empty v0.1 workspace migrates to v2");
-        assert_eq!(ledger_versions(&conn), vec![1, 2]);
+        migrate(&mut conn).expect("empty v0.1 workspace migrates through v3");
+        assert_eq!(ledger_versions(&conn), vec![1, 2, 3]);
         assert_eq!(schema_health(&conn).expect("health"), true);
         assert!(columns(&conn, "projects").contains("slug"));
         fs::remove_dir_all(&dir).ok();

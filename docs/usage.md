@@ -24,6 +24,13 @@ awctl project list
 | `awctl project add` | Store project metadata | Yes, database only |
 | `awctl project list` | List projects in slug order | No |
 | `awctl project show` | Show a project by full ID or unique prefix | No |
+| `awctl artifact create` | Create a new empty governed artifact | Yes, database + file |
+| `awctl artifact show` | Show an artifact by full ID or unique prefix | No |
+| `awctl artifact list` | List artifacts with filters | No |
+| `awctl artifact archive` | Archive an artifact (status only) | Yes, database only |
+| `awctl artifact trash` | Move an artifact into governed trash | Yes, database + file |
+| `awctl artifact restore` | Restore a trashed artifact to its original path | Yes, database + file |
+| `awctl artifact relink` | Point an artifact at a new artifacts/ path | Yes, database only |
 
 ### Initialize
 
@@ -116,6 +123,46 @@ awctl project show 019c4f86 --json
 
 No match is an operational error. A prefix matching multiple projects is rejected as ambiguous.
 
+### Manage Artifacts
+
+Artifacts are governed files that live under `artifacts/` and are tracked with
+status, fingerprint (SHA-256 + size), and audit events.
+
+```bash
+# Create an empty artifact for a project (project id or unique prefix).
+awctl artifact create --project 019c4f86 --type doc --title "Design notes"
+awctl artifact create --project 019c4f86 --type report --title "Q3 review" --json
+
+# Show, list, and filter.
+awctl artifact show 019c4f86-1234-7abc-8def-0123456789ab
+awctl artifact list
+awctl artifact list --status active
+awctl artifact list --type doc --json
+
+# Lifecycle: the legal transitions are
+#   active -> archived | trashed, trashed -> active, archived -> active.
+awctl artifact archive 019c4f86-1234-7abc-8def-0123456789ab
+awctl artifact trash 019c4f86-1234-7abc-8def-0123456789ab
+awctl artifact restore 019c4f86-1234-7abc-8def-0123456789ab
+
+# Relink: old file must be gone; target must be an unowned artifacts/ path.
+awctl artifact relink 019c4f86-1234-7abc-8def-0123456789ab --path artifacts/notes-v2.md
+```
+
+Behavior notes:
+
+- `create` always creates a new empty file at `artifacts/<artifact-id>`.
+- `archive` changes metadata only; `trash` physically moves the file to a
+  collision-safe `trash/<id>-<basename>` name; `restore` moves it back to the
+  original path and fails if that path is occupied.
+- `relink` refuses while the old file still exists, rejects an occupied
+  target, and refreshes the stored SHA-256 and size from the new file.
+- Empty artifacts share the empty fingerprint and are always allowed; a
+  duplicate non-empty fingerprint is rejected.
+- Every mutation writes an audit event in the same database transaction, and
+  file/database failures are compensated (the command restores the prior
+  state where possible or reports `compensation_failed`).
+
 ## JSON Mode
 
 The global `--json` flag may appear before or after subcommands:
@@ -158,7 +205,7 @@ Project objects use this shape:
 | Code | Meaning | Examples |
 |---:|---|---|
 | `0` | Command completed | Initialization, query, or diagnostic report produced |
-| `1` | Operational failure | Invalid config, unsafe path, database error, slug conflict, unknown/ambiguous project |
+| `1` | Operational failure | Invalid config, unsafe path, database error, slug conflict, unknown/ambiguous project or artifact, illegal lifecycle transition, restore conflict, duplicate fingerprint |
 | `2` | CLI usage error | Unknown command, missing `doctor --quick`, invalid argument |
 | `3` | Workspace not found | No `.awc` exists in the current directory or any ancestor |
 

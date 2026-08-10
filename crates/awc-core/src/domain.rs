@@ -379,6 +379,9 @@ pub enum CommandResult {
     ProjectAdded(Project),
     ProjectList(Vec<Project>),
     ProjectShown(Project),
+    ArtifactCreated(Artifact),
+    ArtifactList(Vec<Artifact>),
+    ArtifactShown(Artifact),
 }
 
 #[cfg(test)]

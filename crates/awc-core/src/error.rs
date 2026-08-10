@@ -3,7 +3,7 @@
 use std::fmt;
 use std::io;
 
-use crate::domain::CONFIG_SCHEMA_VERSION;
+use crate::domain::{ArtifactStatus, CONFIG_SCHEMA_VERSION};
 
 /// Errors produced by AWC core. Messages are user-safe: they never embed
 /// file contents or secrets.
@@ -34,6 +34,27 @@ pub enum AwcError {
     LegacySchemaData,
     /// The slug is empty or violates the canonical slug rules.
     InvalidSlug(String),
+    /// No artifact matches the supplied ID or prefix.
+    ArtifactNotFound,
+    /// Two or more artifacts match a supplied ID prefix.
+    AmbiguousArtifactId,
+    /// The lifecycle edge is not in the approved transition set.
+    ArtifactStatusConflict(ArtifactStatus, ArtifactStatus),
+    /// The path is owned by a governed resource other than the target.
+    PathOwned(String),
+    /// The path is protected agent-runtime content.
+    ProtectedPath(String),
+    /// The path is absolute, escapes the root, or follows a symlink.
+    PathEscape(String),
+    /// The original restore target is occupied or otherwise unavailable.
+    RestoreConflict(String),
+    /// A non-empty fingerprint already belongs to another artifact.
+    DuplicateFingerprint(String),
+    /// A mutation failed after partial filesystem work and compensation
+    /// could not fully restore the prior state.
+    CompensationFailed(String),
+    /// The v3 migration found data it cannot canonicalize; DB unchanged.
+    MigrationConflict(String),
 }
 
 impl AwcError {
@@ -85,6 +106,34 @@ impl fmt::Display for AwcError {
                 "refusing migration: v0.1 foundation tables contain data; no changes were made"
             ),
             AwcError::InvalidSlug(msg) => write!(f, "invalid slug: {msg}"),
+            AwcError::ArtifactNotFound => write!(f, "no artifact matches the given id or prefix"),
+            AwcError::AmbiguousArtifactId => {
+                write!(
+                    f,
+                    "ambiguous artifact id: multiple artifacts match the given prefix"
+                )
+            }
+            AwcError::ArtifactStatusConflict(from, to) => {
+                write!(
+                    f,
+                    "illegal artifact transition: {} -> {}",
+                    from.as_str(),
+                    to.as_str()
+                )
+            }
+            AwcError::PathOwned(path) => write!(f, "path is owned by another resource: {path}"),
+            AwcError::ProtectedPath(path) => {
+                write!(f, "protected path is managed by the agent runtime: {path}")
+            }
+            AwcError::PathEscape(path) => {
+                write!(f, "path escapes the workspace or follows a symlink: {path}")
+            }
+            AwcError::RestoreConflict(msg) => write!(f, "restore conflict: {msg}"),
+            AwcError::DuplicateFingerprint(sha) => {
+                write!(f, "duplicate artifact fingerprint: sha256 {sha}")
+            }
+            AwcError::CompensationFailed(msg) => write!(f, "compensation failed: {msg}"),
+            AwcError::MigrationConflict(msg) => write!(f, "migration conflict: {msg}"),
         }
     }
 }

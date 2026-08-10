@@ -13,8 +13,8 @@ pub mod error;
 pub mod infrastructure;
 
 pub use domain::{
-    ArtifactId, AuditEventId, CheckResult, CommandResult, Config, ContentFingerprint, InitStatus,
-    ProjectId, QuickDoctor, Status, Workspace,
+    Artifact, ArtifactId, ArtifactStatus, AuditEventId, CheckResult, CommandResult, Config,
+    ContentFingerprint, InitStatus, PathOwnership, ProjectId, QuickDoctor, Status, Workspace,
 };
 pub use error::AwcError;
 

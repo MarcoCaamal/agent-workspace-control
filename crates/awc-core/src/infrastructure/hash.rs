@@ -32,6 +32,13 @@ pub fn fingerprint<R: Read>(reader: R) -> std::io::Result<ContentFingerprint> {
     })
 }
 
+/// Fingerprints an existing file at `path`. Returns the SHA-256 digest and
+/// exact byte count. The file is opened read-only; no mutation occurs.
+pub fn fingerprint_file(path: &std::path::Path) -> std::io::Result<ContentFingerprint> {
+    let file = std::fs::File::open(path)?;
+    fingerprint(file)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

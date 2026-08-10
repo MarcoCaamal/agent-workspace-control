@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use awc_core::{
     application,
-    domain::{AddProject, CheckResult, CommandResult, Project},
+    domain::{AddProject, Artifact, ArtifactStatus, CheckResult, CommandResult, Project},
     error::AwcError,
 };
 use clap::{Parser, Subcommand};
@@ -35,6 +35,54 @@ enum Command {
     Project {
         #[command(subcommand)]
         action: ProjectCommand,
+    },
+    /// Manage governed artifacts.
+    Artifact {
+        #[command(subcommand)]
+        action: ArtifactCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum ArtifactCommand {
+    /// Create a new empty governed artifact under artifacts/.
+    Create {
+        /// Project ID or unique prefix.
+        #[arg(long)]
+        project: String,
+        /// Artifact type (e.g. doc, report).
+        #[arg(long)]
+        r#type: String,
+        /// Artifact title.
+        #[arg(long)]
+        title: String,
+    },
+    /// Show one artifact by ID or unique prefix.
+    Show { id: String },
+    /// List artifacts with optional filters.
+    List {
+        /// Filter by project ID or unique prefix.
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by artifact type.
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Filter by status (active, archived, trashed).
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Archive an artifact (status-only).
+    Archive { id: String },
+    /// Move an artifact into governed trash.
+    Trash { id: String },
+    /// Restore a trashed artifact to its original path.
+    Restore { id: String },
+    /// Relink an artifact to a new artifacts/ path.
+    Relink {
+        id: String,
+        /// New relative path under artifacts/.
+        #[arg(long)]
+        path: String,
     },
 }
 
@@ -84,6 +132,28 @@ fn main() {
             ProjectCommand::List => application::list_projects(&cwd),
             ProjectCommand::Show { id } => application::show_project(&cwd, &id),
         },
+        Command::Artifact { action } => match action {
+            ArtifactCommand::Create {
+                project,
+                r#type,
+                title,
+            } => application::create_artifact(&cwd, &project, &r#type, &title),
+            ArtifactCommand::Show { id } => application::show_artifact(&cwd, &id),
+            ArtifactCommand::List {
+                project,
+                r#type,
+                status,
+            } => {
+                let status = parse_status_filter(status.as_deref());
+                status.and_then(|status| {
+                    application::list_artifacts(&cwd, project.as_deref(), r#type.as_deref(), status)
+                })
+            }
+            ArtifactCommand::Archive { id } => application::archive_artifact(&cwd, &id),
+            ArtifactCommand::Trash { id } => application::trash_artifact(&cwd, &id),
+            ArtifactCommand::Restore { id } => application::restore_artifact(&cwd, &id),
+            ArtifactCommand::Relink { id, path } => application::relink_artifact(&cwd, &id, &path),
+        },
     };
     match result {
         Ok(result) if cli.json => render_json(&result),
@@ -92,6 +162,16 @@ fn main() {
             render_error(cli.json, &err);
             std::process::exit(err.exit_code());
         }
+    }
+}
+
+/// Parses an optional status filter; an invalid value is a usage error.
+fn parse_status_filter(raw: Option<&str>) -> Result<Option<ArtifactStatus>, AwcError> {
+    match raw {
+        None => Ok(None),
+        Some(value) => ArtifactStatus::parse(value).map(Some).ok_or_else(|| {
+            AwcError::Usage("invalid status; expected active, archived, or trashed".into())
+        }),
     }
 }
 
@@ -137,6 +217,44 @@ fn project_view(p: &Project) -> ProjectView {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtifactView {
+    id: String,
+    project_id: String,
+    artifact_type: String,
+    title: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    original_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
+    last_seen_at: String,
+    created_at: String,
+    updated_at: String,
+}
+
+fn artifact_view(a: &Artifact) -> ArtifactView {
+    ArtifactView {
+        id: a.id.0.to_string(),
+        project_id: a.project_id.0.to_string(),
+        artifact_type: a.artifact_type.clone(),
+        title: a.title.clone(),
+        status: a.status.as_str().to_string(),
+        path: a.path.as_ref().map(|p| p.display().to_string()),
+        original_path: a.original_path.as_ref().map(|p| p.display().to_string()),
+        sha256: a.sha256.clone(),
+        size: a.size,
+        last_seen_at: a.last_seen_at.clone(),
+        created_at: a.created_at.clone(),
+        updated_at: a.updated_at.clone(),
+    }
+}
+
+#[derive(Serialize)]
 #[serde(untagged)]
 enum DataView {
     Workspace(WorkspaceView),
@@ -149,6 +267,12 @@ enum DataView {
     },
     ProjectList {
         projects: Vec<ProjectView>,
+    },
+    Artifact {
+        artifact: ArtifactView,
+    },
+    ArtifactList {
+        artifacts: Vec<ArtifactView>,
     },
 }
 
@@ -211,6 +335,14 @@ fn render_json(result: &CommandResult) {
         CommandResult::ProjectList(projects) => ok_doc(DataView::ProjectList {
             projects: projects.iter().map(project_view).collect(),
         }),
+        CommandResult::ArtifactCreated(a) | CommandResult::ArtifactShown(a) => {
+            ok_doc(DataView::Artifact {
+                artifact: artifact_view(a),
+            })
+        }
+        CommandResult::ArtifactList(artifacts) => ok_doc(DataView::ArtifactList {
+            artifacts: artifacts.iter().map(artifact_view).collect(),
+        }),
         r => ok_doc(ws(parts(r).expect("doctor handled"))),
     };
     write_json(&doc);
@@ -259,6 +391,20 @@ fn render_human(result: &CommandResult) {
                 println!("  - {} ({})", p.slug, p.name);
             }
         }
+        CommandResult::ArtifactCreated(a) => {
+            println!("artifact created: {} ({})", a.id.0, a.title);
+            print_artifact(a);
+        }
+        CommandResult::ArtifactShown(a) => {
+            println!("artifact: {} ({})", a.id.0, a.title);
+            print_artifact(a);
+        }
+        CommandResult::ArtifactList(artifacts) => {
+            println!("artifacts ({}):", artifacts.len());
+            for a in artifacts {
+                println!("  - {} [{}] {}", a.id.0, a.status.as_str(), a.title);
+            }
+        }
         r => {
             let (root, v, db, schema) = parts(r).expect("doctor handled");
             println!("AWC workspace at {}", root.display());
@@ -275,6 +421,23 @@ fn print_project(p: &Project) {
     if let Some(root) = &p.root_path {
         println!("  root: {}", root.display());
     }
+}
+
+fn print_artifact(a: &Artifact) {
+    println!("  id: {}", a.id.0);
+    println!("  project: {}", a.project_id.0);
+    println!("  type: {}", a.artifact_type);
+    println!("  status: {}", a.status.as_str());
+    if let Some(path) = &a.path {
+        println!("  path: {}", path.display());
+    }
+    if let Some(sha) = &a.sha256 {
+        println!("  sha256: {sha}");
+    }
+    if let Some(size) = a.size {
+        println!("  size: {size}");
+    }
+    println!("  created: {}", a.created_at);
 }
 
 fn render_error(json: bool, err: &AwcError) {

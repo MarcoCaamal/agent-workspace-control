@@ -51,10 +51,10 @@ Chain strategy pending: orchestrator/user decision required before apply.
 
 ## Phase 4: CLI/Contracts
 
-- [ ] 4.1 RED: contracts in `crates/awctl/tests/cli.rs`: v1 JSON, snake_case errors, exits 0/1/2/3
-- [ ] 4.2 GREEN: artifact subcommands in `awctl/src/main.rs` (create/show/list/archive/trash/restore/relink)
-- [ ] 4.3 Add human/JSON v1 views (original_path, last_seen_at) + error mapping in `main.rs`
-- [ ] 4.4 RED→GREEN: prefix resolution: unknown → `artifact_not_found`, ambiguous → `ambiguous_artifact_id`
+- [x] 4.1 RED: contracts in `crates/awctl/tests/cli.rs`: v1 JSON, snake_case errors, exits 0/1/2/3
+- [x] 4.2 GREEN: artifact subcommands in `awctl/src/main.rs` (create/show/list/archive/trash/restore/relink)
+- [x] 4.3 Add human/JSON v1 views (original_path, last_seen_at) + error mapping in `main.rs`
+- [x] 4.4 RED→GREEN: prefix resolution: unknown → `artifact_not_found`, ambiguous → `ambiguous_artifact_id`
 
 ## Phase 5: Docs/Verification
 

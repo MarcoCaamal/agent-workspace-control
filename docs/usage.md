@@ -163,6 +163,42 @@ Behavior notes:
   file/database failures are compensated (the command restores the prior
   state where possible or reports `compensation_failed`).
 
+### Adopt An Existing Workspace
+
+`adopt` helps onboard a brownfield workspace that was not initialized with
+AWC. It never deletes and never guesses destructively.
+
+```bash
+# Classify files read-only (plan/review/report patterns, temporary,
+# sensitive, runtime, unknown).
+awctl adopt scan
+awctl adopt scan --json
+
+# Persist an explicit adoption plan with a workspace fingerprint.
+awctl adopt plan
+awctl adopt plan --json
+
+# Apply the plan per action (stale plans are rejected).
+awctl adopt apply adopt-2026-08-10-12-00-00
+awctl adopt apply adopt-2026-08-10-12-00-00 --project 019c4f86 --json
+```
+
+Behavior notes:
+
+- `scan` is strictly read-only: it classifies candidates with deterministic
+  signals (filename/extension). Sensitive files (`.env*`, `*.pem`, `*key*`,
+  `.ssh/**`) are flagged and never touched; runtime files (`AGENTS.md`,
+  `memory/**`) are recognized and never moved.
+- `plan` stores explicit actions under `.awc/runtime/adopt/` together with a
+  workspace fingerprint (sorted path + mtime + size walk).
+- `apply` re-checks the fingerprint first: if the workspace changed since the
+  plan was created, it fails with `stale_adopt_plan` and executes nothing.
+  Each action then re-checks its own preconditions; a failing action is
+  reported as skipped and the remaining actions continue.
+- Register actions move the candidate into `artifacts/` and register it as an
+  active artifact with a mandatory project; unknown candidates are moved to
+  `inbox/`; nothing is ever deleted.
+
 ## JSON Mode
 
 The global `--json` flag may appear before or after subcommands:

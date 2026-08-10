@@ -41,6 +41,27 @@ enum Command {
         #[command(subcommand)]
         action: ArtifactCommand,
     },
+    /// Adopt an existing brownfield workspace.
+    Adopt {
+        #[command(subcommand)]
+        action: AdoptCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdoptCommand {
+    /// Classify workspace files read-only (plan, review, report, temp, sensitive...).
+    Scan,
+    /// Persist an explicit adoption plan with a workspace fingerprint.
+    Plan,
+    /// Apply a plan per action with precondition re-checks.
+    Apply {
+        /// Plan id from `adopt plan`.
+        id: String,
+        /// Target project for registered artifacts.
+        #[arg(long)]
+        project: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -153,6 +174,13 @@ fn main() {
             ArtifactCommand::Trash { id } => application::trash_artifact(&cwd, &id),
             ArtifactCommand::Restore { id } => application::restore_artifact(&cwd, &id),
             ArtifactCommand::Relink { id, path } => application::relink_artifact(&cwd, &id, &path),
+        },
+        Command::Adopt { action } => match action {
+            AdoptCommand::Scan => application::scan_adopt(&cwd),
+            AdoptCommand::Plan => application::plan_adopt(&cwd),
+            AdoptCommand::Apply { id, project } => {
+                application::apply_adopt_with_project(&cwd, &id, project.as_deref())
+            }
         },
     };
     match result {
@@ -274,6 +302,27 @@ enum DataView {
     ArtifactList {
         artifacts: Vec<ArtifactView>,
     },
+    AdoptScan {
+        candidates: Vec<AdoptCandidateView>,
+    },
+    AdoptPlanCreated {
+        plan_id: String,
+        actions: usize,
+    },
+    AdoptApplied {
+        plan_id: String,
+        applied: usize,
+        skipped: usize,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdoptCandidateView {
+    path: String,
+    category: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    suggested_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -307,6 +356,7 @@ fn parts(result: &CommandResult) -> Option<(&Path, u32, bool, bool)> {
         | CommandResult::ArtifactShown(_) => None,
         CommandResult::AdoptScan(_) => None,
         CommandResult::AdoptPlanCreated { .. } => None,
+        CommandResult::AdoptApplied { .. } => None,
     }
 }
 
@@ -344,6 +394,31 @@ fn render_json(result: &CommandResult) {
         }
         CommandResult::ArtifactList(artifacts) => ok_doc(DataView::ArtifactList {
             artifacts: artifacts.iter().map(artifact_view).collect(),
+        }),
+        CommandResult::AdoptScan(candidates) => ok_doc(DataView::AdoptScan {
+            candidates: candidates
+                .iter()
+                .map(|c| AdoptCandidateView {
+                    path: c.rel_path.clone(),
+                    category: c.category.as_str().to_string(),
+                    suggested_type: c.suggested_type.clone(),
+                })
+                .collect(),
+        }),
+        CommandResult::AdoptPlanCreated { plan_id, actions } => {
+            ok_doc(DataView::AdoptPlanCreated {
+                plan_id: plan_id.clone(),
+                actions: *actions,
+            })
+        }
+        CommandResult::AdoptApplied {
+            plan_id,
+            applied,
+            skipped,
+        } => ok_doc(DataView::AdoptApplied {
+            plan_id: plan_id.clone(),
+            applied: *applied,
+            skipped: *skipped,
         }),
         r => ok_doc(ws(parts(r).expect("doctor handled"))),
     };
@@ -406,6 +481,27 @@ fn render_human(result: &CommandResult) {
             for a in artifacts {
                 println!("  - {} [{}] {}", a.id.0, a.status.as_str(), a.title);
             }
+        }
+        CommandResult::AdoptScan(candidates) => {
+            println!("adopt scan ({} candidates):", candidates.len());
+            for c in candidates {
+                let action = match (&c.suggested_type, c.category.as_str()) {
+                    (Some(t), _) => format!("register as {t}"),
+                    (None, "unknown") => "move to inbox".to_string(),
+                    (None, cat) => cat.replace('_', " "),
+                };
+                println!("  {} [{}] -> {action}", c.rel_path, c.category.as_str());
+            }
+        }
+        CommandResult::AdoptPlanCreated { plan_id, actions } => {
+            println!("adopt plan created: {plan_id} ({actions} actions)");
+        }
+        CommandResult::AdoptApplied {
+            plan_id,
+            applied,
+            skipped,
+        } => {
+            println!("adopt apply {plan_id}: {applied} applied, {skipped} skipped");
         }
         r => {
             let (root, v, db, schema) = parts(r).expect("doctor handled");

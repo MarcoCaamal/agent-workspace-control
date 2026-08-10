@@ -41,13 +41,13 @@ Chain strategy pending: orchestrator/user decision required before apply.
 
 ## Phase 3: Application Use Cases
 
-- [ ] 3.1 RED→GREEN: `create_artifact`: derive `artifacts/<id>`, empty file, fingerprint, reject occupied/duplicate
-- [ ] 3.2 RED→GREEN: `show_artifact`/`list_artifacts`: filters, `created_at DESC, id DESC`
-- [ ] 3.3 RED→GREEN: `archive_artifact`: status-only + audit
-- [ ] 3.4 RED→GREEN: `trash_artifact`: collision-safe `trash/<id>-<basename>`, move, audit
-- [ ] 3.5 RED→GREEN: `restore_artifact`: original path free, reverse sequence
-- [ ] 3.6 RED→GREEN: `relink_artifact`: old absent, unowned target, refreshed fingerprint
-- [ ] 3.7 Verify deferred caps (adopt/purge/reconciliation/MCP) rejected, no mutation
+- [x] 3.1 RED→GREEN: `create_artifact`: derive `artifacts/<id>`, empty file, fingerprint, reject occupied/duplicate
+- [x] 3.2 RED→GREEN: `show_artifact`/`list_artifacts`: filters, `created_at DESC, id DESC`
+- [x] 3.3 RED→GREEN: `archive_artifact`: status-only + audit
+- [x] 3.4 RED→GREEN: `trash_artifact`: collision-safe `trash/<id>-<basename>`, move, audit
+- [x] 3.5 RED→GREEN: `restore_artifact`: original path free, reverse sequence
+- [x] 3.6 RED→GREEN: `relink_artifact`: old absent, unowned target, refreshed fingerprint
+- [x] 3.7 Verify deferred caps (adopt/purge/reconciliation/MCP) rejected, no mutation
 
 ## Phase 4: CLI/Contracts
 

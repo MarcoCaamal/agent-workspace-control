@@ -177,7 +177,10 @@ fn parts(result: &CommandResult) -> Option<(&Path, u32, bool, bool)> {
         CommandResult::Doctor(_)
         | CommandResult::ProjectAdded(_)
         | CommandResult::ProjectList(_)
-        | CommandResult::ProjectShown(_) => None,
+        | CommandResult::ProjectShown(_)
+        | CommandResult::ArtifactCreated(_)
+        | CommandResult::ArtifactList(_)
+        | CommandResult::ArtifactShown(_) => None,
     }
 }
 

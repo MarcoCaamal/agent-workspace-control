@@ -99,15 +99,62 @@ Project slugs are lowercase ASCII alphanumeric strings separated by single hyphe
 
 This refusal is deliberate: AWC has no safe, general conversion for manually populated legacy rows.
 
+The schema-v3 migration is additive and lifecycle-aligned:
+
+- It canonicalizes any legacy `tracked` status to `active`, backfills
+  `updated_at`/`original_path`, and adds partial unique indexes on non-NULL
+  `path` and on `sha256 WHERE size > 0` (so multiple empty artifacts remain
+  legal).
+- Before any v3 DDL it refuses the migration when legacy rows contain an
+  unknown status, duplicate non-NULL paths, or duplicate non-empty
+  fingerprints — the database is left unchanged in those cases.
+
+## Artifact Lifecycle
+
+Artifacts are governed files under `artifacts/` tracked with status, content
+fingerprint (SHA-256 + size), and mandatory audit events.
+
+- Legal transitions: `active → archived`, `active → trashed`,
+  `trashed → active`, `archived → active`. Everything else is rejected.
+- `archive` is metadata-only; `trash` moves the file to a collision-safe
+  `trash/<id>-<basename>` path; `restore` moves it back to the original path
+  and conflicts when that path is occupied.
+- `relink` requires the old file absent, an unowned non-symlink
+  `artifacts/` target, and refreshes the fingerprint from the new file.
+- Writable lifecycle targets are `artifacts/**` and `trash/**`; every other
+  path class stays protected, ignored, or user-managed.
+
+## Compensating Consistency
+
+Database and filesystem mutations are not atomic as one unit. Each file-changing
+command orders its steps so a failure restores the prior state where possible
+and never reports success:
+
+- `create`: temp file → rename to final → database insert + audit; a database
+  failure removes the final file.
+- `trash` / `restore`: move the file, then update the database + audit; a
+  database failure moves the file back.
+- `archive` / `relink`: one database transaction only (relink fingerprints
+  the target before the update).
+
+A crash between the filesystem step and the commit can leave residue that is
+kept observable for future reconciliation; the command reports
+`compensation_failed` rather than partial success.
+
 ## Managed-Write Boundaries
 
 | Operation | Writes allowed |
 |---|---|
 | `init` | `.awc/config.toml` when absent, `.awc/state.sqlite3`, and configured governed directories inside the workspace root |
 | `project add` | A new row in the existing workspace database |
+| `artifact create` | A new empty file under `artifacts/` and an artifact row + audit event |
+| `artifact archive` | Artifact status/updated_at and an audit event |
+| `artifact trash` / `restore` | A file move between `artifacts/` and `trash/` plus row + audit |
+| `artifact relink` | Artifact path/fingerprint/size and an audit event |
 | `status` | None; configuration and database are opened read-only |
 | `doctor --quick` | None; failures are reported, never repaired |
 | `project list` / `project show` | None; database is opened read-only |
+| `artifact list` / `artifact show` | None; database is opened read-only |
 
 The optional project `root_path` is stored and displayed as external context. It is not canonicalized, created, inspected, or treated as a managed root by project commands.
 
@@ -119,12 +166,14 @@ The optional project `root_path` is stored and displayed as external context. It
 4. A migration ledger entry is committed with its migration, never before it.
 5. Populated legacy foundation tables are preserved rather than guessed at or destroyed.
 6. Project slug collisions fail before insertion.
-7. An ID prefix resolves only when exactly one project matches.
+7. An ID prefix resolves only when exactly one project or artifact matches.
 8. External project roots are metadata, not write authority.
 9. JSON success contains `data`; JSON failure contains `error`; neither contains both.
+10. Duplicate non-empty artifact fingerprints and occupied artifact paths are rejected; empty artifacts are exempt.
+11. File-changing artifact commands compensate failures and never report partial success.
 
 ## Roadmap Boundaries
 
-The schema and hash primitive prepare for artifact governance, but they do not implement it. Artifact lifecycle, adoption, cleanup, reconciliation, full diagnostics, audit behavior, MCP, and agent adapters remain roadmap work. See the [roadmap exploration](../openspec/changes/awc-artifact-governance-adopt/exploration.md) and [product design](design/awc-product-design.md).
+The artifact lifecycle is implemented for governed create/show/list/archive/trash/restore/relink. Adoption, cleanup, purge, reconciliation, full diagnostics, MCP, and agent adapters remain roadmap work. See the [roadmap exploration](../openspec/changes/awc-artifact-governance-adopt/exploration.md) and [product design](design/awc-product-design.md).
 
 Canonical implemented requirements live under [`openspec/specs/`](../openspec/specs/).

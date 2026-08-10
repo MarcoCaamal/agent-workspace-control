@@ -82,6 +82,12 @@ pub mod test_support {
         pub fail_at: Mutex<HashSet<String>>,
     }
 
+    impl Default for FailingFs {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl FailingFs {
         pub fn new() -> Self {
             FailingFs {
@@ -95,10 +101,9 @@ pub mod test_support {
 
         fn check(&self, step: &str) -> Result<(), AwcError> {
             if self.fail_at.lock().unwrap().contains(step) {
-                return Err(AwcError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("injected failure at {step}"),
-                )));
+                return Err(AwcError::Io(std::io::Error::other(format!(
+                    "injected failure at {step}"
+                ))));
             }
             Ok(())
         }

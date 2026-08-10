@@ -356,6 +356,46 @@ pub fn insert_artifact(conn: &mut Connection, artifact: &Artifact) -> Result<(),
     Ok(())
 }
 
+/// Registers an EXISTING governed file as an artifact (adopt apply): same
+/// insert semantics as `insert_artifact` but the audit event records
+/// `artifact.registered` and the path must already exist on disk.
+pub fn register_artifact(conn: &mut Connection, artifact: &Artifact) -> Result<(), AwcError> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO artifacts (id, project_id, artifact_type, title, path, original_path, \
+         status, sha256, size, last_seen_at, created_at, updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        rusqlite::params![
+            artifact.id.0.to_string(),
+            artifact.project_id.0.to_string(),
+            artifact.artifact_type,
+            artifact.title,
+            artifact
+                .path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact
+                .original_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            artifact.status.as_str(),
+            artifact.sha256,
+            artifact.size.map(|s| s as i64),
+            artifact.last_seen_at,
+            artifact.created_at,
+            artifact.updated_at,
+        ],
+    )?;
+    insert_audit_event_tx(
+        &tx,
+        artifact.project_id,
+        Some(artifact.id),
+        "artifact.registered",
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Updates an artifact's mutable fields and writes an audit event in one
 /// transaction.
 pub fn update_artifact(

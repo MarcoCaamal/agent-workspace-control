@@ -130,7 +130,10 @@ pub fn validate_artifact_target(root: &Path, rel: &str) -> Result<PathBuf, AwcEr
 
     match classify_path(&rel) {
         PathOwnership::AgentRuntimeManaged => return Err(AwcError::ProtectedPath(path)),
-        PathOwnership::AwcManaged if parts[0] == OsStr::new("artifacts") => {}
+        // Lifecycle writes target `artifacts/**` (create/relink) and
+        // `trash/**` (collision-safe trash moves); both are AWC-governed.
+        PathOwnership::AwcManaged
+            if parts[0] == OsStr::new("artifacts") || parts[0] == OsStr::new("trash") => {}
         _ => return Err(AwcError::PathOwned(path)),
     }
 
@@ -410,10 +413,18 @@ mod tests {
             ".awc/state.sqlite3",
             "inbox/x",
             "tmp/x",
-            "trash/x",
         ] {
             expect_owned(&root, path);
         }
+        // `artifacts/**` and `trash/**` are the writable lifecycle targets.
+        assert!(
+            validate_artifact_target(&root, "artifacts/x.txt").is_ok(),
+            "artifacts target is writable"
+        );
+        assert!(
+            validate_artifact_target(&root, "trash/x").is_ok(),
+            "trash target is writable"
+        );
         for path in ["../up", "artifacts/../x", "/etc/passwd", ""] {
             expect_escape(&root, path);
         }

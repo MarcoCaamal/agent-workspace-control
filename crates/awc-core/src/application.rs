@@ -11,6 +11,7 @@ use crate::domain::{
     resolve_artifact_id_prefix, resolve_id_prefix, validate_slug,
 };
 use crate::error::AwcError;
+use crate::infrastructure::adopt::{self, AdoptPlan, PlanAction, WorkspaceFingerprint};
 use crate::infrastructure::artifacts::{ArtifactFs, OsFs};
 use crate::infrastructure::classify::{self, SuggestedAction};
 use crate::infrastructure::config;
@@ -537,6 +538,47 @@ fn infer_artifact_type(rel: &std::path::Path) -> String {
     } else {
         "report".to_string()
     }
+}
+
+/// Creates an adopt plan from a scan: persists explicit per-candidate
+/// actions plus the current workspace fingerprint under
+/// `.awc/runtime/adopt/<plan-id>.json`. Regeneration-only.
+pub fn plan_adopt(start: &Path) -> Result<CommandResult, AwcError> {
+    let (root, state_dir) = paths::discover_with_root(start)?;
+    let fingerprint = adopt::workspace_fingerprint(&root)?;
+    let CommandResult::AdoptScan(candidates) = scan_adopt(&root)? else {
+        return Err(AwcError::Usage("adopt plan requires a scan".into()));
+    };
+    let actions: Vec<PlanAction> = candidates
+        .iter()
+        .filter(|c| c.category != ScanCategory::KnownRuntime)
+        .map(|c| match &c.suggested_type {
+            Some(t) => PlanAction::Register {
+                rel_path: c.rel_path.clone(),
+                artifact_type: t.clone(),
+            },
+            None => match c.category {
+                ScanCategory::SensitiveCandidate | ScanCategory::TemporaryCandidate => {
+                    PlanAction::Skip {
+                        rel_path: c.rel_path.clone(),
+                    }
+                }
+                _ => PlanAction::MoveToInbox {
+                    rel_path: c.rel_path.clone(),
+                },
+            },
+        })
+        .collect();
+    let plan = AdoptPlan {
+        id: format!("adopt-{}", chrono_now().replace([' ', ':'], "-")),
+        fingerprint,
+        actions,
+    };
+    adopt::save_plan(&state_dir, &plan)?;
+    Ok(CommandResult::AdoptPlanCreated {
+        plan_id: plan.id,
+        actions: plan.actions.len(),
+    })
 }
 
 /// Resolves exactly one artifact by ID prefix against the persistence layer.
@@ -1223,6 +1265,48 @@ mod tests {
         assert_eq!(fs::read(root.join("AGENTS.md")).unwrap(), b"# Agent");
         assert_eq!(fs::read(root.join(".env")).unwrap(), b"SECRET=1");
         assert_eq!(fs::read(root.join("notes.md")).unwrap(), b"notes");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adopt_plan_persists_explicit_actions_and_fingerprint() {
+        let root = temp_dir("adopt-plan");
+        init(&root).expect("init");
+        fs::write(root.join("adopt-plan.md"), b"# Plan").expect("plan");
+        fs::write(root.join("review-pr-1.md"), b"# Review").expect("review");
+        fs::write(root.join("notes.md"), b"notes").expect("notes");
+        fs::write(root.join(".env"), b"SECRET=1").expect("env");
+
+        let CommandResult::AdoptPlanCreated { plan_id, actions } = plan_adopt(&root).expect("plan")
+        else {
+            panic!("expected AdoptPlanCreated");
+        };
+        assert_eq!(actions, 4, "register x2 + move-to-inbox x1 + skip x1");
+
+        let (_, state_dir) = paths::discover_with_root(&root).expect("discover");
+        let plan = adopt::load_plan(&state_dir, &plan_id).expect("load");
+        assert_eq!(plan.actions.len(), 4);
+        assert!(plan.actions.iter().any(|a| matches!(
+            a,
+            PlanAction::Register { rel_path, artifact_type }
+                if rel_path == "adopt-plan.md" && artifact_type == "plan"
+        )));
+        assert!(plan.actions.iter().any(|a| matches!(
+            a,
+            PlanAction::Register { rel_path, artifact_type }
+                if rel_path == "review-pr-1.md" && artifact_type == "code_review"
+        )));
+        assert!(plan.actions.iter().any(|a| matches!(
+            a,
+            PlanAction::Skip { rel_path } if rel_path == ".env"
+        )));
+        assert!(plan.actions.iter().any(|a| matches!(
+            a,
+            PlanAction::MoveToInbox { rel_path } if rel_path == "notes.md"
+        )));
+        // Fingerprint matches a fresh computation.
+        let fresh = adopt::workspace_fingerprint(&root).expect("fingerprint");
+        assert_eq!(plan.fingerprint, fresh);
         fs::remove_dir_all(&root).ok();
     }
 }

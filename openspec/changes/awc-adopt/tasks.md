@@ -29,10 +29,10 @@ Chain strategy pending: orchestrator/user decision required before apply (featur
 
 ## Phase 2: Plan and Persistence
 
-- [ ] 2.1 RED: workspace fingerprint determinism tests (sorted path+mtime+size walk; change detection)
-- [ ] 2.2 GREEN: fingerprint walk + `AdoptPlan` model in `infrastructure/adopt.rs`
-- [ ] 2.3 RED: plan save/load/hash under `.awc/runtime/adopt/<plan-id>.json`; missing plan → `adopt_plan_not_found`
-- [ ] 2.4 GREEN: `plan_adopt` use case: persist explicit actions + fingerprint; regeneration-only
+- [x] 2.1 RED: workspace fingerprint determinism tests (sorted path+mtime+size walk; change detection)
+- [x] 2.2 GREEN: fingerprint walk + `AdoptPlan` model in `infrastructure/adopt.rs`
+- [x] 2.3 RED: plan save/load/hash under `.awc/runtime/adopt/<plan-id>.json`; missing plan → `adopt_plan_not_found`
+- [x] 2.4 GREEN: `plan_adopt` use case: persist explicit actions + fingerprint; regeneration-only
 
 ## Phase 3: Apply and CLI
 

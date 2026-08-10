@@ -417,6 +417,7 @@ pub enum CommandResult {
     ArtifactList(Vec<Artifact>),
     ArtifactShown(Artifact),
     AdoptScan(Vec<AdoptCandidate>),
+    AdoptPlanCreated { plan_id: String, actions: usize },
 }
 
 #[cfg(test)]

@@ -306,6 +306,7 @@ fn parts(result: &CommandResult) -> Option<(&Path, u32, bool, bool)> {
         | CommandResult::ArtifactList(_)
         | CommandResult::ArtifactShown(_) => None,
         CommandResult::AdoptScan(_) => None,
+        CommandResult::AdoptPlanCreated { .. } => None,
     }
 }
 
@@ -465,6 +466,8 @@ fn render_error(json: bool, err: &AwcError) {
             AwcError::ProtectedPath(_) => ("protected_path", err.to_string()),
             AwcError::PathEscape(_) => ("path_escape", err.to_string()),
             AwcError::MigrationConflict(_) => ("migration_conflict", err.to_string()),
+            AwcError::AdoptPlanNotFound(_) => ("adopt_plan_not_found", err.to_string()),
+            AwcError::StaleAdoptPlan(_) => ("stale_adopt_plan", err.to_string()),
             AwcError::RestoreConflict(_) => ("restore_conflict", err.to_string()),
             AwcError::DuplicateFingerprint(_) => ("duplicate_fingerprint", err.to_string()),
             AwcError::CompensationFailed(_) => ("compensation_failed", err.to_string()),

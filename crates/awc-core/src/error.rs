@@ -55,6 +55,10 @@ pub enum AwcError {
     CompensationFailed(String),
     /// The v3 migration found data it cannot canonicalize; DB unchanged.
     MigrationConflict(String),
+    /// An adopt plan id does not exist in the runtime store.
+    AdoptPlanNotFound(String),
+    /// The workspace changed after the adopt plan was created.
+    StaleAdoptPlan(String),
 }
 
 impl AwcError {
@@ -134,6 +138,8 @@ impl fmt::Display for AwcError {
             }
             AwcError::CompensationFailed(msg) => write!(f, "compensation failed: {msg}"),
             AwcError::MigrationConflict(msg) => write!(f, "migration conflict: {msg}"),
+            AwcError::AdoptPlanNotFound(id) => write!(f, "adopt plan not found: {id}"),
+            AwcError::StaleAdoptPlan(msg) => write!(f, "stale adopt plan: {msg}"),
         }
     }
 }

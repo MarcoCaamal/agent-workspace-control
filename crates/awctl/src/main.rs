@@ -305,6 +305,7 @@ fn parts(result: &CommandResult) -> Option<(&Path, u32, bool, bool)> {
         | CommandResult::ArtifactCreated(_)
         | CommandResult::ArtifactList(_)
         | CommandResult::ArtifactShown(_) => None,
+        CommandResult::AdoptScan(_) => None,
     }
 }
 

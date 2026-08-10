@@ -22,10 +22,10 @@ Chain strategy pending: orchestrator/user decision required before apply (featur
 
 ## Phase 1: Classification and Scan
 
-- [ ] 1.1 RED: classifier unit tests in `infrastructure/classify.rs`: plan/review/report patterns, temporary detection, sensitive flag+skip, runtime recognition, ignored exclusion, unknown
-- [ ] 1.2 GREEN: pure `classify(path, size) -> (ScanCategory, Option<SuggestedAction>)` in `infrastructure/classify.rs`
-- [ ] 1.3 RED: `scan_adopt` walk in `application.rs`: read-only over non-governed non-ignored files; zero mutation asserted
-- [ ] 1.4 GREEN: ScanReport model + walk + scan use case (no fs writes)
+- [x] 1.1 RED: classifier unit tests in `infrastructure/classify.rs`: plan/review/report patterns, temporary detection, sensitive flag+skip, runtime recognition, ignored exclusion, unknown
+- [x] 1.2 GREEN: pure `classify(path, size) -> (ScanCategory, Option<SuggestedAction>)` in `infrastructure/classify.rs`
+- [x] 1.3 RED: `scan_adopt` walk in `application.rs`: read-only over non-governed non-ignored files; zero mutation asserted
+- [x] 1.4 GREEN: ScanReport model + walk + scan use case (no fs writes)
 
 ## Phase 2: Plan and Persistence
 

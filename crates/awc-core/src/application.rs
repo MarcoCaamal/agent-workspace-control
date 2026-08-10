@@ -6,12 +6,13 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::domain::{
-    AddProject, Artifact, ArtifactId, ArtifactStatus, CheckResult, CommandResult, InitStatus,
-    ProjectId, QuickDoctor, Status, can_transition, derive_slug, resolve_artifact_id_prefix,
-    resolve_id_prefix, validate_slug,
+    AddProject, AdoptCandidate, Artifact, ArtifactId, ArtifactStatus, CheckResult, CommandResult,
+    InitStatus, ProjectId, QuickDoctor, ScanCategory, Status, can_transition, derive_slug,
+    resolve_artifact_id_prefix, resolve_id_prefix, validate_slug,
 };
 use crate::error::AwcError;
 use crate::infrastructure::artifacts::{ArtifactFs, OsFs};
+use crate::infrastructure::classify::{self, SuggestedAction};
 use crate::infrastructure::config;
 use crate::infrastructure::paths::{self, WORKSPACE_DIR_NAME};
 use crate::infrastructure::sqlite;
@@ -457,6 +458,85 @@ pub fn relink_artifact(
     updated.updated_at = chrono_now();
     sqlite::update_artifact(&mut conn, &updated, "artifact.relinked")?;
     Ok(CommandResult::ArtifactShown(updated))
+}
+
+/// Runs a read-only adopt scan: walks non-governed, non-ignored files under
+/// the workspace root, classifies each with deterministic metadata-only
+/// signals, and returns the ordered candidate report. No file is created,
+/// moved, registered, deleted, or modified.
+pub fn scan_adopt(start: &Path) -> Result<CommandResult, AwcError> {
+    let (root, _) = paths::discover_with_root(start)?;
+    let mut candidates = Vec::new();
+    walk_adopt_dir(&root, &root, &mut candidates)?;
+    candidates.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+    Ok(CommandResult::AdoptScan(candidates))
+}
+
+/// Walks `dir` (canonical) under the canonical `root`, skipping governed
+/// directories, ignored trees, and the `.awc` state dir, classifying every
+/// other file.
+fn walk_adopt_dir(root: &Path, dir: &Path, out: &mut Vec<AdoptCandidate>) -> Result<(), AwcError> {
+    let mut entries = std::fs::read_dir(dir).map_err(AwcError::Io)?;
+    let mut names: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+    names.sort();
+    for name in names {
+        let entry = dir.join(&name);
+        let rel = entry
+            .strip_prefix(root)
+            .map_err(|_| AwcError::UnsafeStatePath)?;
+        let first = rel
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .unwrap_or("");
+        // Skip the state dir and governed dirs entirely.
+        if matches!(first, ".awc" | "artifacts" | "inbox" | "tmp" | "trash") {
+            continue;
+        }
+        // Skip ignored trees (existing policy + extended adopt set).
+        if matches!(first, ".git" | "target" | "node_modules" | "dist" | ".venv") {
+            continue;
+        }
+        let meta = std::fs::symlink_metadata(&entry).map_err(AwcError::Io)?;
+        if meta.file_type().is_symlink() {
+            continue; // never follow symlinks during scan
+        }
+        if meta.is_dir() {
+            walk_adopt_dir(root, &entry, out)?;
+            continue;
+        }
+        let (category, action) = classify::classify(&rel);
+        let suggested_type = match (category, action) {
+            (ScanCategory::ManagedCandidate, SuggestedAction::Register) => {
+                Some(infer_artifact_type(&rel))
+            }
+            _ => None,
+        };
+        out.push(AdoptCandidate {
+            rel_path: rel.display().to_string(),
+            category,
+            suggested_type,
+        });
+    }
+    Ok(())
+}
+
+/// Infers a concrete artifact type from the classified filename.
+fn infer_artifact_type(rel: &std::path::Path) -> String {
+    let name = rel
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if name.contains("plan") {
+        "plan".to_string()
+    } else if name.contains("review") || name.starts_with("pr-") {
+        "code_review".to_string()
+    } else {
+        "report".to_string()
+    }
 }
 
 /// Resolves exactly one artifact by ID prefix against the persistence layer.
@@ -1088,6 +1168,61 @@ mod tests {
             trash_artifact(&root, &id).expect_err("archived->trashed illegal"),
             AwcError::ArtifactStatusConflict(_, _)
         ));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adopt_scan_classifies_workspace_read_only() {
+        let root = temp_dir("adopt-scan");
+        init(&root).expect("init");
+        // Brownfield files outside governed dirs.
+        fs::write(root.join("adopt-plan.md"), b"# Plan").expect("plan");
+        fs::write(root.join("review-pr-13.md"), b"# Review").expect("review");
+        fs::write(root.join("q3-report.md"), b"# Report").expect("report");
+        fs::write(root.join("AGENTS.md"), b"# Agent").expect("agents");
+        fs::write(root.join(".env"), b"SECRET=1").expect("env");
+        fs::write(root.join("backup.tmp"), b"tmp").expect("tmp");
+        fs::write(root.join("notes.md"), b"notes").expect("notes");
+        fs::create_dir_all(root.join("node_modules")).expect("nm");
+        fs::write(root.join("node_modules").join("x.js"), b"x").expect("nm file");
+
+        let CommandResult::AdoptScan(candidates) = scan_adopt(&root).expect("scan") else {
+            panic!("expected AdoptScan");
+        };
+        let by_path: std::collections::HashMap<&str, &ScanCategory> = candidates
+            .iter()
+            .map(|c| (c.rel_path.as_str(), &c.category))
+            .collect();
+        assert_eq!(
+            by_path.get("adopt-plan.md"),
+            Some(&&ScanCategory::ManagedCandidate)
+        );
+        assert_eq!(
+            by_path.get("review-pr-13.md"),
+            Some(&&ScanCategory::ManagedCandidate)
+        );
+        assert_eq!(
+            by_path.get("q3-report.md"),
+            Some(&&ScanCategory::ManagedCandidate)
+        );
+        assert_eq!(by_path.get("AGENTS.md"), Some(&&ScanCategory::KnownRuntime));
+        assert_eq!(
+            by_path.get(".env"),
+            Some(&&ScanCategory::SensitiveCandidate)
+        );
+        assert_eq!(
+            by_path.get("backup.tmp"),
+            Some(&&ScanCategory::TemporaryCandidate)
+        );
+        assert_eq!(by_path.get("notes.md"), Some(&&ScanCategory::Unknown));
+        assert!(
+            !by_path.contains_key("node_modules/x.js"),
+            "ignored trees are excluded"
+        );
+        // Zero mutation: every file still exists with original bytes.
+        assert_eq!(fs::read(root.join("AGENTS.md")).unwrap(), b"# Agent");
+        assert_eq!(fs::read(root.join(".env")).unwrap(), b"SECRET=1");
+        assert_eq!(fs::read(root.join("notes.md")).unwrap(), b"notes");
         fs::remove_dir_all(&root).ok();
     }
 }

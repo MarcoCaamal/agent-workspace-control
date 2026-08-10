@@ -429,12 +429,12 @@ pub fn relink_artifact(
     let config = config::load_readonly(&state_dir)?;
     let mut conn = sqlite::open_readwrite(&state_dir.join(&config.database_file))?;
     let artifact = resolve_one_artifact(&conn, id_or_prefix)?;
-    if let Some(current) = artifact.path.as_ref() {
-        if current.exists() {
-            return Err(AwcError::RestoreConflict(
-                "current file still exists; remove it before relinking".into(),
-            ));
-        }
+    if let Some(current) = artifact.path.as_ref()
+        && current.exists()
+    {
+        return Err(AwcError::RestoreConflict(
+            "current file still exists; remove it before relinking".into(),
+        ));
     }
     let target = paths::validate_artifact_target(&root, new_path)?;
     if sqlite::path_is_owned(&conn, new_path, Some(artifact.id))? {

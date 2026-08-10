@@ -45,7 +45,7 @@ Chain strategy pending: orchestrator/user decision required before apply (featur
 
 ## Phase 4: Docs and Final Gates
 
-- [ ] 4.1 Update `docs/usage.md`: adopt scan/plan/apply, classification, stale plans
-- [ ] 4.2 Update `docs/architecture.md`: adopt flow, fingerprint, per-action apply
-- [ ] 4.3 Gate: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` (17 pre-existing baseline), `cargo fmt --check`
-- [ ] 4.4 Manual smoke: scan → plan → apply in temp brownfield workspace; record results
+- [x] 4.1 Update `docs/usage.md`: adopt scan/plan/apply, classification, stale plans
+- [x] 4.2 Update `docs/architecture.md`: adopt flow, fingerprint, per-action apply
+- [x] 4.3 Gate: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` (17 pre-existing baseline), `cargo fmt --check`
+- [x] 4.4 Manual smoke: scan → plan → apply in temp brownfield workspace; record results

@@ -141,6 +141,27 @@ A crash between the filesystem step and the commit can leave residue that is
 kept observable for future reconciliation; the command reports
 `compensation_failed` rather than partial success.
 
+## Adopt
+
+`adopt` onboard brownfield workspaces with a three-step, no-destruction flow:
+
+- `adopt scan` walks non-governed, non-ignored files and classifies each
+  candidate with deterministic metadata-only signals (location, name,
+  extension, size). Sensitive candidates (`.env*`, `*.pem`, `*key*`,
+  `.ssh/**`) are flagged and skipped; runtime files are recognized and never
+  touched; ignored trees (`node_modules/**`, `dist/**`, `.venv/**`) are
+  excluded. Scan never mutates anything.
+- `adopt plan` persists explicit per-candidate actions under
+  `.awc/runtime/adopt/<plan-id>.json` together with a workspace fingerprint
+  (sorted walk of path + mtime + size).
+- `adopt apply` revalidates the fingerprint first (`stale_adopt_plan` rejects
+  with zero actions), then executes each action with an immediate
+  precondition re-check. Register actions move the candidate into
+  `artifacts/` and register it as an active artifact (existing-file
+  registration, fingerprint from current bytes, audit `artifact.registered`);
+  unknown candidates move to `inbox/`; a failing action is skipped and the
+  rest continue.
+
 ## Managed-Write Boundaries
 
 | Operation | Writes allowed |
@@ -151,6 +172,9 @@ kept observable for future reconciliation; the command reports
 | `artifact archive` | Artifact status/updated_at and an audit event |
 | `artifact trash` / `restore` | A file move between `artifacts/` and `trash/` plus row + audit |
 | `artifact relink` | Artifact path/fingerprint/size and an audit event |
+| `adopt scan` | None; walk is strictly read-only |
+| `adopt plan` | A plan document under `.awc/runtime/adopt/` |
+| `adopt apply` | Moves candidates into `artifacts/` or `inbox/` plus artifact rows/audit per applied action |
 | `status` | None; configuration and database are opened read-only |
 | `doctor --quick` | None; failures are reported, never repaired |
 | `project list` / `project show` | None; database is opened read-only |

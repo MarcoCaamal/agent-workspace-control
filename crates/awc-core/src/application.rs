@@ -477,7 +477,7 @@ pub fn scan_adopt(start: &Path) -> Result<CommandResult, AwcError> {
 /// directories, ignored trees, and the `.awc` state dir, classifying every
 /// other file.
 fn walk_adopt_dir(root: &Path, dir: &Path, out: &mut Vec<AdoptCandidate>) -> Result<(), AwcError> {
-    let mut entries = std::fs::read_dir(dir).map_err(AwcError::Io)?;
+    let entries = std::fs::read_dir(dir).map_err(AwcError::Io)?;
     let mut names: Vec<_> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.file_name())
@@ -509,10 +509,10 @@ fn walk_adopt_dir(root: &Path, dir: &Path, out: &mut Vec<AdoptCandidate>) -> Res
             walk_adopt_dir(root, &entry, out)?;
             continue;
         }
-        let (category, action) = classify::classify(&rel);
+        let (category, action) = classify::classify(rel);
         let suggested_type = match (category, action) {
             (ScanCategory::ManagedCandidate, SuggestedAction::Register) => {
-                Some(infer_artifact_type(&rel))
+                Some(infer_artifact_type(rel))
             }
             _ => None,
         };
@@ -691,7 +691,7 @@ pub fn apply_adopt_with_project(
                     }
                 };
                 let fs = OsFs;
-                if let Err(_) = fs.move_file(&source, &target) {
+                if fs.move_file(&source, &target).is_err() {
                     skipped += 1;
                     continue;
                 }

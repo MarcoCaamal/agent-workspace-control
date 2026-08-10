@@ -74,7 +74,7 @@ fn collect_fingerprint_lines(
     dir: &Path,
     out: &mut Vec<String>,
 ) -> Result<(), AwcError> {
-    let mut entries = fs::read_dir(dir).map_err(AwcError::Io)?;
+    let entries = fs::read_dir(dir).map_err(AwcError::Io)?;
     let mut names: Vec<_> = entries
         .filter_map(|e| e.ok())
         .map(|e| e.file_name())

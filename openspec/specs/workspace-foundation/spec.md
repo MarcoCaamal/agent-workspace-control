@@ -45,7 +45,9 @@ The system MUST discover a workspace by searching current and ancestor directori
 
 ### Requirement: Defensive schema-v2 migration
 
-The system MUST migrate new and empty v0.1 workspaces to schema version 2 with complete Project, Artifact, and AuditEvent metadata. It MUST retain the `state.sqlite3` filename. It MUST reject a migration when a v0.1 foundation table contains manually populated data and MUST leave that data unchanged.
+The system MUST migrate new and empty v0.1 workspaces to schema version 2 with complete Project, Artifact, and AuditEvent metadata. It MUST retain the `state.sqlite3` filename. It MUST reject a migration when a v0.1 foundation table contains manually populated data and MUST leave that data unchanged. It MUST apply an additive lifecycle migration that canonicalizes existing artifact statuses to `active`, `archived`, or `trashed`, adds lifecycle-required timestamps, and enforces unique artifact paths without changing config schema version 1 or project ownership requirements.
+
+(Previously: schema v2 established metadata but did not define lifecycle status canonicalization, timestamps, or unique paths.)
 
 #### Scenario: Migrate an empty v0.1 workspace
 
@@ -58,6 +60,24 @@ The system MUST migrate new and empty v0.1 workspaces to schema version 2 with c
 - GIVEN a v0.1 foundation table contains manually populated data
 - WHEN initialization attempts migration v2
 - THEN it fails without destructive conversion or data mutation
+
+#### Scenario: Canonicalize legacy artifact lifecycle state
+
+- GIVEN a schema-v2 workspace whose artifact rows use the legacy `tracked` status
+- WHEN initialization applies the lifecycle migration
+- THEN those artifacts become `active` and lifecycle timestamps are populated
+
+#### Scenario: Refuse unsafe lifecycle alignment
+
+- GIVEN a schema-v2 workspace with duplicate non-NULL artifact paths or duplicate non-empty fingerprints
+- WHEN initialization applies the lifecycle migration
+- THEN it fails without schema, row, or ledger mutation
+
+#### Scenario: Enforce unique artifact paths after migration
+
+- GIVEN the lifecycle migration has been applied
+- WHEN an artifact insert uses a path already owned by another artifact
+- THEN the insert fails without mutation
 
 ### Requirement: Backward-compatible governed-directory configuration
 

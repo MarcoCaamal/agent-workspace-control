@@ -58,7 +58,7 @@ Chain strategy pending: orchestrator/user decision required before apply.
 
 ## Phase 5: Docs/Verification
 
-- [ ] 5.1 Update `docs/usage.md`: commands, transitions, policy, compensation
-- [ ] 5.2 Update `docs/architecture.md`: v3 migration, compensating consistency
-- [ ] 5.3 Gate: `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`
-- [ ] 5.4 Manual smoke: 7 commands in temp workspace; record results
+- [x] 5.1 Update `docs/usage.md`: commands, transitions, policy, compensation
+- [x] 5.2 Update `docs/architecture.md`: v3 migration, compensating consistency
+- [x] 5.3 Gate: `cargo test --workspace`, `cargo clippy --workspace -- -D warnings`, `cargo fmt --check`
+- [x] 5.4 Manual smoke: 7 commands in temp workspace; record results
